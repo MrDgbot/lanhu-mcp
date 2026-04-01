@@ -15,6 +15,8 @@
 
 **Cursor / Windsurf**：编辑 `.cursor/mcp.json`
 
+**方式 A（推荐，零安装）**：把 Cookie 写在 `env` 里（不要用 `NODE_OPTIONS=--env-file`，Node 会拒绝）。
+
 ```json
 {
   "mcpServers": {
@@ -26,6 +28,25 @@
   }
 }
 ```
+
+**方式 B（本地 clone + 用 `.env`）**：把 `--env-file` 放在 **`node` 的参数里**，不要放进 `NODE_OPTIONS`。
+
+```json
+{
+  "mcpServers": {
+    "lanhu": {
+      "command": "node",
+      "args": [
+        "--env-file=/绝对路径/lanhu-mcp/.env",
+        "/绝对路径/lanhu-mcp/dist/server.js"
+      ],
+      "cwd": "/绝对路径/lanhu-mcp"
+    }
+  }
+}
+```
+
+先在本仓库执行 `npm run build` 生成 `dist/`。
 
 **Claude Code**：
 

@@ -1,6 +1,6 @@
 {
   "name": "mcp-lanhu",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for Lanhu (蓝湖) design collaboration platform — lets AI assistants read designs, PRDs and slices.",
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,15 @@
     "type": "git",
     "url": "https://github.com/MrDgbot/lanhu-mcp.git"
   },
-  "keywords": ["mcp", "lanhu", "蓝湖", "design", "ai", "cursor", "claude"],
+  "keywords": [
+    "mcp",
+    "lanhu",
+    "蓝湖",
+    "design",
+    "ai",
+    "cursor",
+    "claude"
+  ],
   "engines": {
     "node": ">=20"
   },

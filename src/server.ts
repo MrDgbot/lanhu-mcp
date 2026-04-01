@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -25,8 +26,9 @@ export async function main(): Promise<void> {
 }
 
 const entrypoint = process.argv[1];
+const resolvedEntry = entrypoint != null ? fs.realpathSync(path.resolve(entrypoint)) : null;
 const isDirectExecution =
-  entrypoint != null && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href;
+  resolvedEntry != null && import.meta.url === pathToFileURL(resolvedEntry).href;
 
 if (isDirectExecution) {
   main().catch((error: unknown) => {
