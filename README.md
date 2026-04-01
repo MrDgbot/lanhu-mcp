@@ -111,14 +111,13 @@ npm run build && npm start
 
 服务器使用 **stdio 传输**，在 AI 客户端（Cursor、Claude Code 等）中配置：
 
-**Cursor 配置示例**（`.cursor/mcp.json`）：
+**推荐方式（npx，无需 clone）**：
 ```json
 {
   "mcpServers": {
     "lanhu": {
-      "command": "node",
-      "args": ["dist/server.js"],
-      "cwd": "/path/to/lanhu-mcp",
+      "command": "npx",
+      "args": ["-y", "lanhu-mcp"],
       "env": {
         "LANHU_COOKIE": "your_cookie_here"
       }
@@ -127,7 +126,7 @@ npm run build && npm start
 }
 ```
 
-**或使用 npx 方式**（无需 clone）：
+**本地开发配置**（clone 后）：
 ```json
 {
   "mcpServers": {

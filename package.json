@@ -1,23 +1,34 @@
 {
-  "name": "lanhu-mcp-ts-scaffold",
-  "version": "0.1.0",
-  "private": true,
-  "description": "TypeScript scaffold for the Lanhu MCP rewrite.",
+  "name": "lanhu-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Lanhu (蓝湖) design collaboration platform — lets AI assistants read designs, PRDs and slices.",
   "type": "module",
+  "license": "MIT",
+  "author": "MrDgbot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MrDgbot/lanhu-mcp.git"
+  },
+  "keywords": ["mcp", "lanhu", "蓝湖", "design", "ai", "cursor", "claude"],
   "engines": {
     "node": ">=20"
   },
+  "bin": {
+    "lanhu-mcp": "dist/server.js"
+  },
+  "files": [
+    "dist",
+    "config.example.env",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
-    "test": "vitest run",
-    "ts:status": "node ./scripts/ts-workspace-status.mjs",
-    "ts:install": "node ./scripts/ts-workspace-status.mjs --install",
-    "ts:dev": "node ./scripts/ts-workspace-status.mjs --run dev",
-    "ts:build": "node ./scripts/ts-workspace-status.mjs --run build",
-    "ts:test": "node ./scripts/ts-workspace-status.mjs --run test"
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.1",
