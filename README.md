@@ -46,7 +46,7 @@
 }
 ```
 
-先在本仓库执行 `npm run build` 生成 `dist/`。
+先在本仓库执行 `npm run build` 生成 `dist/`。可选配置项（日志级别、超时等）见 `config.example.env`。
 
 **Claude Code**：
 

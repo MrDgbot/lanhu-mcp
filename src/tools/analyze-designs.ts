@@ -88,7 +88,8 @@ export function registerAnalyzeDesignsTool(server: McpServer): void {
     {
       description:
         "Analyze Lanhu UI design images, returning screenshots, HTML+CSS code, and design tokens.\n\n" +
-        "Call lanhu_list_designs first to get the design list.\n\n" +
+        "Call lanhu_list_designs first to get the design list.\n" +
+        "If the URL is a detailDetach link (contains image_id), skip lanhu_list_designs and pass the URL directly with design_names='all'.\n\n" +
         "Returns:\n" +
         "    - Summary text with HTML+CSS code for each design (CSS values from original design data)\n" +
         "    - Design images in order (image N = design N)\n" +
@@ -99,7 +100,8 @@ export function registerAnalyzeDesignsTool(server: McpServer): void {
           .string()
           .min(1)
           .describe(
-            "Lanhu project URL without docId (UI design). Example: https://lanhuapp.com/web/#/item/project/stage?tid=xxx&pid=xxx",
+            "Lanhu project URL (UI design). Example: https://lanhuapp.com/web/#/item/project/stage?tid=xxx&pid=xxx. " +
+            "Also accepts detailDetach URLs with image_id — only that single design will be analyzed.",
           ),
         design_names: z
           .union([z.string(), z.array(z.string())])

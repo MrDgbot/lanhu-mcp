@@ -16,7 +16,8 @@ export function registerListDesignsTool(server: McpServer): void {
           .string()
           .min(1)
           .describe(
-            "Lanhu project URL without docId (UI design). Example: https://lanhuapp.com/web/#/item/project/stage?tid=xxx&pid=xxx",
+            "Lanhu project URL (UI design). Example: https://lanhuapp.com/web/#/item/project/stage?tid=xxx&pid=xxx. " +
+            "Also accepts detailDetach URLs with image_id — returns only that single design.",
           ),
       },
     },
