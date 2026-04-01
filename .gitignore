@@ -1,0 +1,36 @@
+# Node / TypeScript
+node_modules/
+.npm/
+*.tsbuildinfo
+dist/
+coverage/
+
+# Runtime
+.env
+logs/
+data/
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+.ace-tool/
+
+# Python legacy (archived locally, not tracked)
+archive/
+lanhu_mcp_server.py
+pyproject.toml
+requirements.txt
+tests/test_basic.py
+tests/test_css_utils.py
+tests/__init__.py
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+uv.lock

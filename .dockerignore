@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.git
+.gitignore
+.cursor
+.idea
+.vscode
+archive
+docs
+tests-ts
+coverage
+data
+logs
+*.md
