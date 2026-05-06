@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import path from "node:path";
@@ -90,11 +91,22 @@ export async function main(): Promise<void> {
   await server.connect(transport);
 }
 
-const entrypoint = process.argv[1];
-const isDirectExecution =
-  entrypoint != null && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href;
+export function isDirectExecution(
+  entrypoint = process.argv[1],
+  moduleUrl = import.meta.url,
+): boolean {
+  if (entrypoint == null) {
+    return false;
+  }
 
-if (isDirectExecution) {
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(path.resolve(entrypoint))).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error(`Lanhu MCP TypeScript scaffold failed to start: ${message}`);
