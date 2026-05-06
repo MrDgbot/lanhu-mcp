@@ -1,6 +1,6 @@
 {
   "name": "mcp-lanhu",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "MCP server for Lanhu (蓝湖) design collaboration platform — lets AI assistants read designs, PRDs and slices.",
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,28 @@
     "type": "git",
     "url": "https://github.com/MrDgbot/lanhu-mcp.git"
   },
-  "keywords": ["mcp", "mcp-server", "model-context-protocol", "lanhu", "蓝湖", "design", "design-to-code", "figma-alternative", "ai", "cursor", "windsurf", "claude", "claude-desktop", "claude-code", "html-css", "design-tokens", "prd", "prototype", "ui-design", "frontend"],
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "lanhu",
+    "蓝湖",
+    "design",
+    "design-to-code",
+    "figma-alternative",
+    "ai",
+    "cursor",
+    "windsurf",
+    "claude",
+    "claude-desktop",
+    "claude-code",
+    "html-css",
+    "design-tokens",
+    "prd",
+    "prototype",
+    "ui-design",
+    "frontend"
+  ],
   "engines": {
     "node": ">=20"
   },
