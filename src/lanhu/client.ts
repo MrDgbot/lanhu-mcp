@@ -140,14 +140,16 @@ export function parseLanhuUrl(input: string): LanhuUrlParams {
   if (!projectId) {
     throw new Error("URL parsing failed: missing required param pid (project_id)");
   }
-  if (!teamId) {
+  const kind = detectUrlKind(route);
+  const isSingleDesignUrl = kind === "design" && route?.includes("/detailDetach") && docId;
+  if (!teamId && !isSingleDesignUrl) {
     throw new Error("URL parsing failed: missing required param tid (team_id)");
   }
 
   return {
     rawUrl,
     route,
-    kind: detectUrlKind(route),
+    kind,
     teamId,
     projectId,
     docId,
@@ -231,6 +233,7 @@ export class LanhuClient {
       image_id: imageId,
       team_id: teamId,
       project_id: projectId,
+      all_versions: 0,
     });
   }
 

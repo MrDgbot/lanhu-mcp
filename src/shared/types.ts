@@ -70,7 +70,7 @@ export interface LanhuUrlParams {
   rawUrl: string;
   route?: string;
   kind: LanhuUrlKind;
-  teamId: string;
+  teamId?: string;
   projectId: string;
   docId?: string;
   imageId?: string;

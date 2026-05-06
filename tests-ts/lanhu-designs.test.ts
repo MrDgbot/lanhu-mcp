@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { LanhuClient, parseLanhuUrl } from "../src/lanhu/client.js";
-import { listDesigns } from "../src/lanhu/designs.js";
+import { getSketchJson, listDesigns } from "../src/lanhu/designs.js";
 
 function createJsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -25,19 +25,47 @@ describe("parseLanhuUrl", () => {
     expect(parsed.docId).toBe("image-1");
     expect(parsed.imageId).toBe("image-1");
   });
+
+  it("allows detailDetach URLs without team id", () => {
+    const parsed = parseLanhuUrl(
+      "https://lanhuapp.com/web/#/item/project/detailDetach?pid=project-1&image_id=image-1",
+    );
+
+    expect(parsed.kind).toBe("design");
+    expect(parsed.teamId).toBeUndefined();
+    expect(parsed.projectId).toBe("project-1");
+    expect(parsed.docId).toBe("image-1");
+  });
 });
 
 describe("listDesigns", () => {
-  it("uses document detail flow for detailDetach single-image links", async () => {
+  it("uses HAR detail flow for detailDetach single-image links with team id", async () => {
     const seenRequests: string[] = [];
     const client = new LanhuClient({
       fetchImpl: async (input) => {
         const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
         seenRequests.push(url.toString());
 
+        if (url.pathname === "/api/project/multi_info") {
+          expect(url.searchParams.get("project_id")).toBe("project-1");
+          expect(url.searchParams.get("team_id")).toBe("team-1");
+          expect(url.searchParams.get("img_limit")).toBe("1");
+          expect(url.searchParams.get("detach")).toBe("1");
+
+          return createJsonResponse({
+            code: "00000",
+            result: {
+              name: "订单项目",
+            },
+          });
+        }
+
         expect(url.pathname).toBe("/api/project/image");
-        expect(url.searchParams.get("pid")).toBe("project-1");
+        expect(url.searchParams.get("dds_status")).toBe("1");
         expect(url.searchParams.get("image_id")).toBe("image-1");
+        expect(url.searchParams.get("team_id")).toBe("team-1");
+        expect(url.searchParams.get("project_id")).toBe("project-1");
+        expect(url.searchParams.get("all_versions")).toBe("0");
 
         return createJsonResponse({
           code: "00000",
@@ -58,8 +86,12 @@ describe("listDesigns", () => {
       "https://lanhuapp.com/web/#/item/project/detailDetach?tid=team-1&pid=project-1&image_id=image-1",
     );
 
-    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests.map((requestUrl) => new URL(requestUrl).pathname)).toEqual([
+      "/api/project/multi_info",
+      "/api/project/image",
+    ]);
     expect(result.source).toBe("detailDetach");
+    expect(result.projectName).toBe("订单项目");
     expect(result.totalDesigns).toBe(1);
     expect(result.designs[0]).toMatchObject({
       id: "image-1",
@@ -69,6 +101,37 @@ describe("listDesigns", () => {
       url: "https://img.lanhuapp.com/XDCoverPNGORG/demo.png",
       source: "detailDetach",
     });
+  });
+
+  it("uses document detail flow for detailDetach links without team id", async () => {
+    const client = new LanhuClient({
+      fetchImpl: async (input) => {
+        const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
+
+        expect(url.pathname).toBe("/api/project/image");
+        expect(url.searchParams.get("pid")).toBe("project-1");
+        expect(url.searchParams.get("image_id")).toBe("image-1");
+        expect(url.searchParams.has("team_id")).toBe(false);
+
+        return createJsonResponse({
+          code: "00000",
+          result: {
+            id: "image-1",
+            name: "详情页首图",
+            url: "https://img.lanhuapp.com/XDCoverPNGORG/demo.png",
+          },
+        });
+      },
+    });
+
+    const result = await listDesigns(
+      client,
+      "https://lanhuapp.com/web/#/item/project/detailDetach?pid=project-1&image_id=image-1",
+    );
+
+    expect(result.source).toBe("detailDetach");
+    expect(result.params.teamId).toBeUndefined();
+    expect(result.designs[0].url).toBe("https://img.lanhuapp.com/XDCoverPNGORG/demo.png");
   });
 
   it("maps /api/project/images into ordered design summaries", async () => {
@@ -125,5 +188,47 @@ describe("listDesigns", () => {
       { index: 1, id: "image-a", name: "首页" },
       { index: 2, id: "image-b", name: "详情页" },
     ]);
+  });
+});
+
+describe("getSketchJson", () => {
+  it("loads Sketch JSON from detailDetach document info without team id", async () => {
+    const seenPaths: string[] = [];
+    const client = new LanhuClient({
+      fetchImpl: async (input) => {
+        const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
+        seenPaths.push(url.pathname);
+
+        if (url.pathname === "/api/project/image") {
+          expect(url.searchParams.get("pid")).toBe("project-1");
+          expect(url.searchParams.get("image_id")).toBe("image-1");
+          expect(url.searchParams.has("team_id")).toBe(false);
+
+          return createJsonResponse({
+            code: "00000",
+            result: {
+              id: "image-1",
+              name: "首页",
+              versions: [{
+                id: "version-1",
+                json_url: "https://assets.lanhuapp.com/XDJSON/demo.json",
+              }],
+            },
+          });
+        }
+
+        expect(url.toString()).toBe("https://assets.lanhuapp.com/XDJSON/demo.json");
+        return createJsonResponse({
+          device: "iPhone",
+          artboard: { layers: [] },
+        });
+      },
+    });
+
+    const result = await getSketchJson(client, "image-1", undefined, "project-1");
+
+    expect(seenPaths).toEqual(["/api/project/image", "/XDJSON/demo.json"]);
+    expect(result.versionId).toBe("version-1");
+    expect(result.sketch).toMatchObject({ device: "iPhone" });
   });
 });

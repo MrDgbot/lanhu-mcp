@@ -283,15 +283,27 @@ export async function listDesigns(
   const params = typeof input === "string" ? parseLanhuUrl(input) : input;
 
   if (params.docId && isDetailDetachUrl(params)) {
-    const documentInfo = await client.getDocumentInfo(params.projectId, params.docId);
+    const projectInfo = params.teamId
+      ? await client.getProjectMultiInfo(params.projectId, params.teamId, {
+        img_limit: 1,
+        detach: 1,
+      })
+      : undefined;
+    const documentInfo = params.teamId
+      ? await client.getDesignDocument(params.docId, params.teamId, params.projectId)
+      : await client.getDocumentInfo(params.projectId, params.docId);
     return {
       status: "success",
-      projectName: getProjectName(documentInfo),
+      projectName: projectInfo ? getProjectName(projectInfo) ?? getProjectName(documentInfo) : getProjectName(documentInfo),
       totalDesigns: 1,
       designs: [mapDetachedDesign(documentInfo, params)],
       source: "detailDetach",
       params,
     };
+  }
+
+  if (!params.teamId) {
+    throw new Error("URL parsing failed: missing required param tid (team_id)");
   }
 
   const payload = await client.getLanhuPayload<LanhuProjectImagesPayload>("/api/project/images", {
@@ -349,10 +361,12 @@ export async function getDesignSchemaJson(
 export async function getSketchJson(
   client: LanhuClient,
   imageId: string,
-  teamId: string,
+  teamId: string | undefined,
   projectId: string,
 ): Promise<LanhuSketchJsonResult> {
-  const documentInfo = await client.getDesignDocument(imageId, teamId, projectId);
+  const documentInfo = teamId
+    ? await client.getDesignDocument(imageId, teamId, projectId)
+    : await client.getDocumentInfo(projectId, imageId);
   const latestVersion = getLatestVersionInfo(documentInfo);
   const jsonUrl = asString(latestVersion?.json_url);
 
@@ -377,7 +391,7 @@ export async function getSketchJson(
 export async function getSlices(
   client: LanhuClient,
   imageId: string,
-  teamId: string,
+  teamId: string | undefined,
   projectId: string,
   includeMetadata = true,
 ): Promise<LanhuSlicesResult> {

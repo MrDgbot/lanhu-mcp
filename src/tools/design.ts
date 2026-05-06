@@ -77,7 +77,7 @@ interface DesignHtmlResult {
   layerCssAnnotations?: LayerAnnotation[];
 }
 
-const DEFAULT_INCLUDE = ["html", "tokens"] as const;
+const DEFAULT_INCLUDE = ["html", "tokens", "layers", "image"] as const;
 
 type IncludeOption = "html" | "image" | "tokens" | "layout" | "layers" | "slices";
 
@@ -105,7 +105,7 @@ export function registerDesignTool(server: McpServer): void {
           "Number = index from list, exact string = match by name or id.",
         ),
         include: z.array(z.enum(["html", "image", "tokens", "layout", "layers", "slices"])).optional().describe(
-          "Content to include in analyze mode. Default: ['html', 'tokens']. " +
+          "Content to include in analyze mode. Default: ['html', 'tokens', 'layers', 'image']. " +
           "Options: html, image (base64), tokens, layout, layers, slices.",
         ),
       },
@@ -147,14 +147,22 @@ export function registerDesignTool(server: McpServer): void {
             true,
           );
         }
+        const teamId = designsResult.params.teamId;
 
         // === SLICES MODE ===
         if (mode === "slices") {
+          if (!teamId && targetDesigns[0].source !== "detailDetach") {
+            return createToolResult(
+              "team_id is required for slices mode.",
+              { status: "error", hint: "Use a Lanhu URL that includes tid/team_id." },
+              true,
+            );
+          }
           const target = targetDesigns[0];
           const slicesResult = await getSlices(
             client,
             target.id,
-            designsResult.params.teamId,
+            teamId,
             designsResult.params.projectId,
             true,
           );
@@ -166,11 +174,18 @@ export function registerDesignTool(server: McpServer): void {
 
         // === TOKENS MODE ===
         if (mode === "tokens") {
+          if (!teamId && targetDesigns.some((design) => design.source !== "detailDetach")) {
+            return createToolResult(
+              "team_id is required for tokens mode.",
+              { status: "error", hint: "Use a Lanhu URL that includes tid/team_id." },
+              true,
+            );
+          }
           const tokenResults = await mapConcurrent(
             targetDesigns,
             async (design) => {
               const sketchResult = await withRetry(
-                () => getSketchJson(client, design.id, designsResult.params.teamId, designsResult.params.projectId),
+                () => getSketchJson(client, design.id, teamId, designsResult.params.projectId),
               );
               return {
                 name: design.name,
@@ -241,8 +256,14 @@ export function registerDesignTool(server: McpServer): void {
 
           if (includeSet.has("html")) {
             try {
+              if (design.source === "detailDetach") {
+                throw new Error("Using Sketch JSON flow for detailDetach.");
+              }
+              if (!teamId) {
+                throw new Error("team_id is required for HTML extraction; image preview is still available.");
+              }
               const schemaResult = await getDesignSchemaJson(
-                client, design.id, designsResult.params.teamId, designsResult.params.projectId,
+                client, design.id, teamId, designsResult.params.projectId,
               );
               const rawHtml = convertSchemaToHtml(schemaResult.schema);
               const localized = localizeImageUrls(rawHtml);
@@ -257,37 +278,43 @@ export function registerDesignTool(server: McpServer): void {
             }
           }
 
-          // Sketch JSON -> tokens / layers / fallback
-          try {
-            const sketchResult = await withRetry(
-              () => getSketchJson(client, design.id, designsResult.params.teamId, designsResult.params.projectId),
-            );
-            const sketch = sketchResult.sketch;
+          const needsSketch = includeSet.has("tokens") || includeSet.has("layers") || includeSet.has("html");
+          if (needsSketch) {
+            // Sketch JSON -> tokens / layers / fallback
+            try {
+              if (!teamId && design.source !== "detailDetach") {
+                throw new Error("team_id is required for Sketch extraction; image preview is still available.");
+              }
+              const sketchResult = await withRetry(
+                () => getSketchJson(client, design.id, teamId, designsResult.params.projectId),
+              );
+              const sketch = sketchResult.sketch;
 
-            if (includeSet.has("tokens")) {
-              htmlEntry.designTokens = extractDesignTokens(sketch);
-            }
-            if (includeSet.has("layers")) {
-              htmlEntry.layerTree = extractLayerTree(sketch);
-            }
+              if (includeSet.has("tokens")) {
+                htmlEntry.designTokens = extractDesignTokens(sketch);
+              }
+              if (includeSet.has("layers")) {
+                htmlEntry.layerTree = extractLayerTree(sketch);
+              }
 
-            // Sketch fallback when schema failed
-            if (!htmlEntry.success && includeSet.has("html")) {
-              const deviceStr = String(sketch.device ?? "");
-              const designScale = inferDesignScale(deviceStr);
-              const designImgUrl = design.url?.split("?")[0] ?? "";
-              const sketchConversion = convertSketchToHtml(sketch, designScale, designImgUrl);
-              sketchConversion.imageUrlMapping["./assets/designs/design.png"] = designImgUrl;
+              // Sketch fallback when schema failed
+              if (!htmlEntry.success && includeSet.has("html")) {
+                const deviceStr = String(sketch.device ?? "");
+                const designScale = inferDesignScale(deviceStr);
+                const designImgUrl = design.url?.split("?")[0] ?? "";
+                const sketchConversion = convertSketchToHtml(sketch, designScale, designImgUrl);
+                sketchConversion.imageUrlMapping["./assets/designs/design.png"] = designImgUrl;
 
-              htmlEntry.sketchHtml = minifyHtml(sketchConversion.html);
-              htmlEntry.imageUrlMapping = sketchConversion.imageUrlMapping;
-              htmlEntry.layerCssAnnotations = sketchConversion.layerAnnotations;
-              htmlEntry.sketchAnnotations = extractFullAnnotationsFromSketch(sketch, designScale);
-            }
-          } catch (sketchError) {
-            // Sketch extraction is best-effort
-            if (!htmlEntry.error) {
-              htmlEntry.error = sketchError instanceof Error ? sketchError.message : String(sketchError);
+                htmlEntry.sketchHtml = minifyHtml(sketchConversion.html);
+                htmlEntry.imageUrlMapping = sketchConversion.imageUrlMapping;
+                htmlEntry.layerCssAnnotations = sketchConversion.layerAnnotations;
+                htmlEntry.sketchAnnotations = extractFullAnnotationsFromSketch(sketch, designScale);
+              }
+            } catch (sketchError) {
+              // Sketch extraction is best-effort
+              if (!htmlEntry.error) {
+                htmlEntry.error = sketchError instanceof Error ? sketchError.message : String(sketchError);
+              }
             }
           }
 
@@ -311,7 +338,7 @@ export function registerDesignTool(server: McpServer): void {
         }
 
         // Build summary text
-        const htmlSuccessCount = htmlResults.filter((r) => r.success).length;
+        const htmlSuccessCount = htmlResults.filter((r) => r.success || r.sketchHtml).length;
         const sketchFallbackCount = htmlResults.filter((r) => !r.success && r.sketchHtml).length;
         const summarySections: string[] = [];
 
@@ -347,7 +374,12 @@ export function registerDesignTool(server: McpServer): void {
               }
             }
           } else if (hr.sketchHtml || hr.sketchAnnotations) {
-            summarySections.push(`DDS Schema unavailable (${hr.error ?? "unknown"}), using Sketch fallback.`);
+            const isSketchJsonFlow = hr.error?.includes("Sketch JSON flow");
+            summarySections.push(
+              isSketchJsonFlow
+                ? "Using Sketch JSON flow for detailDetach."
+                : `DDS Schema unavailable (${hr.error ?? "unknown"}), using Sketch fallback.`,
+            );
 
             if (hr.sketchHtml) {
               summarySections.push("```html");
@@ -397,7 +429,7 @@ export function registerDesignTool(server: McpServer): void {
 
         const structuredDesigns = htmlResults.map((hr) => ({
           name: hr.designName,
-          success: hr.success,
+          success: hr.success || Boolean(hr.sketchHtml),
           html_code: hr.htmlCode ?? hr.sketchHtml ?? null,
           image_url_mapping: hr.imageUrlMapping ?? null,
           layout_summary: hr.layoutSummary ?? null,
