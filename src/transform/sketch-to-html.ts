@@ -1,5 +1,11 @@
 import type { UnknownRecord } from "../shared/types.js";
 import { minifyHtml } from "../shared/html.js";
+import {
+  getSketchLayerFrame,
+  getSketchLayerType,
+  hasVisibleSketchLayerData,
+  resolveSketchStructure,
+} from "./sketch-structure.js";
 
 export interface LayerAnnotation {
   name: string;
@@ -236,6 +242,85 @@ function flattenArtboardLayers(rawLayers: unknown[], scale: number): FlatLayer[]
   return result;
 }
 
+function flattenLegacyInfoLayers(rawLayers: unknown[]): FlatLayer[] {
+  const result: FlatLayer[] = [];
+
+  const flatten = (layer: unknown): void => {
+    if (!isRecord(layer) || layer.visible === false || layer.isVisible === false) return;
+
+    const frame = getSketchLayerFrame(layer);
+    const type = getSketchLayerType(layer);
+    const children = Array.isArray(layer.layers) ? layer.layers : [];
+    const ddsImage = isRecord(layer.ddsImage) ? layer.ddsImage : {};
+    const image = isRecord(layer.image) ? layer.image : {};
+    const imageUrl = String(
+      ddsImage.imageUrl ?? ddsImage.svgUrl ?? image.imageUrl ?? image.svgUrl ?? "",
+    );
+
+    if (["groupLayer", "layerSection", "symbolInstence"].includes(type) && !imageUrl) {
+      for (let index = children.length - 1; index >= 0; index--) flatten(children[index]);
+      return;
+    }
+    if (frame.width === 0 && frame.height === 0 && !imageUrl) {
+      for (let index = children.length - 1; index >= 0; index--) flatten(children[index]);
+      return;
+    }
+
+    const mapped: UnknownRecord = {
+      ...layer,
+      type,
+      left: frame.x,
+      top: frame.y,
+      width: frame.width,
+      height: frame.height,
+      __visible: true,
+    };
+
+    if (imageUrl) {
+      mapped.images = {
+        ...(isRecord(layer.images) ? layer.images : {}),
+        [imageUrl.endsWith(".svg") ? "svg" : "png_xxxhd"]: imageUrl,
+      };
+    }
+
+    if (!isRecord(mapped.textInfo)) {
+      const text = isRecord(layer.text) ? layer.text : {};
+      const textStyle = isRecord(text.style) ? text.style : {};
+      const font = isRecord(textStyle.font) ? textStyle.font : {};
+      if (text.value != null || Object.keys(font).length > 0) {
+        mapped.type = "textLayer";
+        mapped.textInfo = {
+          text: String(text.value ?? ""),
+          color: isRecord(textStyle.color) ? textStyle.color : undefined,
+          size: font.size ?? 0,
+          fontPostScriptName: font.name ?? font.postScriptName,
+          fontName: font.name,
+          fontStyleName: font.type ?? "",
+          bold: font.bold ?? false,
+          italic: font.italic ?? false,
+          justification: font.align ?? "left",
+        };
+      }
+    }
+
+    if (!isRecord(mapped.fill)) {
+      const style = isRecord(layer.style) ? layer.style : {};
+      const fills = Array.isArray(layer.fills)
+        ? layer.fills.filter(isRecord)
+        : Array.isArray(style.fills)
+          ? style.fills.filter(isRecord)
+          : [];
+      const fill = fills.find((entry) => entry.isEnabled !== false);
+      if (fill && isRecord(fill.color)) mapped.fill = { color: fill.color };
+    }
+
+    result.push(mapped as FlatLayer);
+  };
+
+  for (let index = rawLayers.length - 1; index >= 0; index--) flatten(rawLayers[index]);
+  return result;
+}
+
 function analyzeSketch(
   sketchData: UnknownRecord,
   designScale = 2.0,
@@ -243,24 +328,20 @@ function analyzeSketch(
   renderHtml = true,
 ): SketchToHtmlResult {
   const scale = designScale || 2.0;
+  const structure = resolveSketchStructure(sketchData);
+  const boardW = px(structure.width || 750, scale);
+  const boardH = px(structure.height || 1334, scale);
+  const layers = structure.kind === "board"
+    ? flattenLayers(structure.layers, scale)
+    : structure.kind === "artboard"
+      ? flattenArtboardLayers(structure.layers, scale)
+      : flattenLegacyInfoLayers(structure.layers);
 
-  let boardW = 375;
-  let boardH = 667;
-  let layers: FlatLayer[] = [];
-
-  if (isRecord(sketchData.board)) {
-    const board = sketchData.board;
-    boardW = px(board.width ?? 750, scale);
-    boardH = px(board.height ?? 1334, scale);
-    const rawLayers = Array.isArray(board.layers) ? board.layers : [];
-    layers = flattenLayers(rawLayers, scale);
-  } else if (isRecord(sketchData.artboard)) {
-    const artboard = sketchData.artboard;
-    const frame = isRecord(artboard.frame) ? artboard.frame : {};
-    boardW = px(frame.width ?? 750, scale);
-    boardH = px(frame.height ?? 1334, scale);
-    const rawLayers = Array.isArray(artboard.layers) ? artboard.layers : [];
-    layers = flattenArtboardLayers(rawLayers, scale);
+  if (hasVisibleSketchLayerData(structure.layers) && layers.length === 0) {
+    throw new Error(
+      `Unsupported Sketch ${structure.kind} layer structure: ` +
+      "found visible layer data but no renderable layers.",
+    );
   }
 
   const cssRules: string[] = [];

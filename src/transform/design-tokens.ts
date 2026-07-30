@@ -1,8 +1,11 @@
 import type { UnknownRecord } from "../shared/types.js";
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import {
+  getSketchLayerFrame,
+  getSketchLayerType,
+  isRecord,
+  isSketchLayerVisible,
+  resolveSketchStructure,
+} from "./sketch-structure.js";
 
 function asNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -20,18 +23,12 @@ function asString(value: unknown): string {
 }
 
 function getDimensions(obj: UnknownRecord): { x: number; y: number; w: number; h: number } {
-  const frame = isRecord(obj.ddsOriginFrame)
-    ? obj.ddsOriginFrame
-    : isRecord(obj.layerOriginFrame)
-      ? obj.layerOriginFrame
-      : isRecord(obj.frame)
-        ? obj.frame
-        : {};
+  const frame = getSketchLayerFrame(obj);
   return {
-    x: asNumber(frame.x ?? obj.left),
-    y: asNumber(frame.y ?? obj.top),
-    w: asNumber(frame.width ?? obj.width),
-    h: asNumber(frame.height ?? obj.height),
+    x: frame.x,
+    y: frame.y,
+    w: frame.width,
+    h: frame.height,
   };
 }
 
@@ -90,12 +87,7 @@ export function extractLayerTreeResult(
   sketch: UnknownRecord,
   maxDepth: LayerDepth = 4,
 ): LayerTreeResult {
-  const artboard = isRecord(sketch.artboard) ? sketch.artboard : undefined;
-  const board = isRecord(sketch.board) ? sketch.board : undefined;
-  const root = artboard ?? board;
-  if (!root) {
-    return { tree: "", truncated: false, depth: maxDepth };
-  }
+  const structure = resolveSketchStructure(sketch);
 
   const lines: string[] = [];
   let truncated = false;
@@ -125,7 +117,7 @@ export function extractLayerTreeResult(
   };
 
   const walk = (layer: UnknownRecord, depth = 0): void => {
-    if (layer.visible === false || layer.isVisible === false) {
+    if (!isSketchLayerVisible(layer)) {
       return;
     }
     if (maxDepth !== "all" && depth > maxDepth) {
@@ -133,7 +125,7 @@ export function extractLayerTreeResult(
       return;
     }
     const dimensions = getDimensions(layer);
-    const type = asString(layer.type) || "?";
+    const type = getSketchLayerType(layer);
     const name = asString(layer.name) || "?";
     const sublayers = Array.isArray(layer.layers) ? layer.layers.filter(isRecord) : [];
     const style = isRecord(layer.style) ? layer.style : {};
@@ -141,7 +133,8 @@ export function extractLayerTreeResult(
 
     if (type === "textLayer") {
       const text = isRecord(layer.text) ? layer.text : {};
-      const rawValue = asString(text.value);
+      const textInfo = isRecord(layer.textInfo) ? layer.textInfo : {};
+      const rawValue = asString(text.value) || asString(textInfo.text);
       const clipped = rawValue.length > 40 ? `${rawValue.slice(0, 40)}...` : rawValue;
       if (clipped) {
         line += ` "${clipped}"`;
@@ -162,14 +155,16 @@ export function extractLayerTreeResult(
     }
   };
 
-  const dimensions = getDimensions(root);
-  const rootType = artboard ? "Artboard" : "Board";
-  lines.push(`${rootType}: ${asString(root.name) || "?"} (${Math.round(dimensions.w)}x${Math.round(dimensions.h)})`);
-  lines.push(`Total layers: ${Array.isArray(root.layers) ? root.layers.length : 0}`);
+  const rootType = structure.kind === "artboard"
+    ? "Artboard"
+    : structure.kind === "board"
+      ? "Board"
+      : "Legacy Sketch";
+  lines.push(`${rootType}: ${structure.name} (${Math.round(structure.width)}x${Math.round(structure.height)})`);
+  lines.push(`Total layers: ${structure.layers.length}`);
   lines.push("");
 
-  const layers = Array.isArray(root.layers) ? root.layers.filter(isRecord) : [];
-  for (const layer of layers) {
+  for (const layer of structure.layers) {
     walk(layer);
   }
   if (truncated) {
@@ -215,7 +210,7 @@ export function extractDesignTokens(sketch: UnknownRecord): string {
   };
 
   const walk = (layer: UnknownRecord): void => {
-    if (layer.visible === false || layer.isVisible === false) return;
+    if (!isSketchLayerVisible(layer)) return;
 
     const style = isRecord(layer.style) ? layer.style : {};
     const fills = Array.isArray(style.fills) ? style.fills.filter(isRecord) : [];
@@ -280,18 +275,8 @@ export function extractDesignTokens(sketch: UnknownRecord): string {
     for (const child of children) walk(child);
   };
 
-  // Entry points: artboard.layers, board.layers, info[]
-  const artboard = isRecord(sketch.artboard) ? sketch.artboard : undefined;
-  const board = isRecord(sketch.board) ? sketch.board : undefined;
-  if (artboard && Array.isArray(artboard.layers)) {
-    for (const layer of artboard.layers.filter(isRecord)) walk(layer);
-  }
-  if (board && Array.isArray(board.layers)) {
-    for (const layer of board.layers.filter(isRecord)) walk(layer);
-  }
-  if (Array.isArray(sketch.info)) {
-    for (const item of sketch.info.filter(isRecord)) walk(item);
-  }
+  const structure = resolveSketchStructure(sketch);
+  for (const layer of structure.layers) walk(layer);
 
   const sortedEntries = (map: Map<string, number>): [string, number][] =>
     [...map.entries()].sort((a, b) => b[1] - a[1]);

@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { legacyInfoSketch } from "./fixtures/legacy-sketch.js";
 
 const mocks = vi.hoisted(() => ({
   getDesignSchemaJson: vi.fn(),
@@ -15,12 +16,16 @@ vi.mock("../src/lanhu/client.js", () => ({
   parseLanhuUrl: vi.fn(() => ({ projectId: "project-1", teamId: "team-1" })),
 }));
 
-vi.mock("../src/lanhu/designs.js", () => ({
-  getDesignSchemaJson: mocks.getDesignSchemaJson,
-  getSketchJson: mocks.getSketchJson,
-  getSlices: mocks.getSlices,
-  listDesigns: mocks.listDesigns,
-}));
+vi.mock("../src/lanhu/designs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lanhu/designs.js")>();
+  return {
+    ...actual,
+    getDesignSchemaJson: mocks.getDesignSchemaJson,
+    getSketchJson: mocks.getSketchJson,
+    getSlices: mocks.getSlices,
+    listDesigns: mocks.listDesigns,
+  };
+});
 
 vi.mock("../src/shared/html.js", () => ({
   minifyHtml: mocks.minifyHtml,
@@ -69,6 +74,25 @@ const projectDesign = {
   raw: {},
 };
 
+function makeSketchResult(
+  sketch: Record<string, unknown> = sketchFixture,
+  imageId = "design-1",
+) {
+  return {
+    imageId,
+    versionId: `version-${imageId}`,
+    jsonUrl: `https://assets.example.com/${imageId}.json`,
+    sketch,
+    documentInfo: {
+      id: imageId,
+      name: imageId === "design-1" ? "Home" : "Detail",
+      width: 375,
+      height: 812,
+      versions: [],
+    },
+  };
+}
+
 function mockDesignList(source: "projectImages" | "detailDetach" = "projectImages"): void {
   mocks.listDesigns.mockResolvedValue({
     totalDesigns: 1,
@@ -78,6 +102,24 @@ function mockDesignList(source: "projectImages" | "detailDetach" = "projectImage
       projectId: "project-1",
       teamId: source === "detailDetach" ? undefined : "team-1",
     },
+  });
+}
+
+function mockTwoDesigns(): void {
+  mocks.listDesigns.mockResolvedValue({
+    totalDesigns: 2,
+    projectName: "Example project",
+    designs: [
+      { ...projectDesign, source: "projectImages" },
+      {
+        ...projectDesign,
+        index: 2,
+        id: "design-2",
+        name: "Detail",
+        source: "projectImages",
+      },
+    ],
+    params: { projectId: "project-1", teamId: "team-1" },
   });
 }
 
@@ -120,7 +162,7 @@ describe("lanhu_design analyze output status", () => {
     vi.clearAllMocks();
     mockDesignList();
     mocks.getDesignSchemaJson.mockResolvedValue({ schema: schemaFixture });
-    mocks.getSketchJson.mockResolvedValue({ sketch: sketchFixture, documentInfo: {} });
+    mocks.getSketchJson.mockResolvedValue(makeSketchResult());
     mocks.getSlices.mockResolvedValue({
       designId: "design-1",
       designName: "Home",
@@ -205,6 +247,74 @@ describe("lanhu_design analyze output status", () => {
     expect(mocks.getSketchJson).toHaveBeenCalledOnce();
   });
 
+  it("analyzes legacy info layers and produces a non-empty Sketch layout", async () => {
+    mockDesignList("detailDetach");
+    mocks.getSketchJson.mockResolvedValue(makeSketchResult(legacyInfoSketch));
+
+    const result = await analyze(["layout", "layers"]);
+    const design = getStructured(result).designs[0];
+
+    expect(design.status).toBe("success");
+    expect(design.layout_source).toBe("sketch");
+    expect(design.layout_summary).toContain("Legacy title");
+    expect(design.layer_tree).toContain("textLayer: Legacy title");
+    expect(design.layer_annotations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Legacy title", text: "Legacy Home" }),
+        expect.objectContaining({ name: "Legacy icon" }),
+      ]),
+    );
+    expect(design.sketch_annotations).toContain("画布尺寸: 375x667");
+  });
+
+  it("keeps annotations and the Schema failure reason for HTML-only Sketch fallback", async () => {
+    mocks.getDesignSchemaJson.mockRejectedValue(new Error("schema unavailable"));
+    mocks.getSketchJson.mockResolvedValue(makeSketchResult(legacyInfoSketch));
+
+    const result = await analyze(["html"]);
+    const design = getStructured(result).designs[0];
+
+    expect(getStructured(result).status).toBe("success");
+    expect(result.isError).toBeUndefined();
+    expect(design.status).toBe("success");
+    expect(design.html_source).toBe("sketch");
+    expect(design.html_code).toContain("Legacy Home");
+    expect(design.layer_annotations).toHaveLength(3);
+    expect(design.sketch_annotations).toContain("Legacy Home");
+    expect(design.errors).toEqual({});
+    expect(design.warnings.html).toContain("schema unavailable");
+    expect(getText(result)).toContain("schema unavailable");
+  });
+
+  it("returns a concrete error for an unknown Sketch root", async () => {
+    mocks.getSketchJson.mockResolvedValue(makeSketchResult({ unexpected: [] }));
+
+    const result = await analyze(["layers"]);
+    const structured = getStructured(result);
+    const design = structured.designs[0];
+
+    expect(structured.status).toBe("error");
+    expect(result.isError).toBe(true);
+    expect(design.status).toBe("error");
+    expect(design.errors.layers).toBe(
+      "Unsupported Sketch structure: expected board.layers, artboard.layers, or info array.",
+    );
+  });
+
+  it("accepts an explicitly empty Sketch board as a successful empty design", async () => {
+    mocks.getSketchJson.mockResolvedValue(makeSketchResult({
+      board: { name: "Empty", width: 750, height: 1334, layers: [] },
+    }));
+
+    const result = await analyze(["layers"]);
+    const design = getStructured(result).designs[0];
+
+    expect(design.status).toBe("success");
+    expect(design.layer_tree).toContain("Total layers: 0");
+    expect(design.layer_annotations).toEqual([]);
+    expect(design.errors).toEqual({});
+  });
+
   it("returns the complete tree when layer_depth is all", async () => {
     const nestedLayer = (depth: number): Record<string, unknown> => ({
       type: depth === 0 ? "shapeLayer" : "groupLayer",
@@ -252,12 +362,73 @@ describe("lanhu_design analyze output status", () => {
     expect(text).not.toContain("Failed: Unknown");
   });
 
-  it("processes slices when requested from analyze mode", async () => {
+  it("loads Sketch once for a layers and slices combination", async () => {
+    const result = await analyze(["layers", "slices"]);
+    const design = getStructured(result).designs[0];
+
+    expect(design.status).toBe("success");
+    expect(design.slices.totalSlices).toBe(0);
+    expect(mocks.getSketchJson).toHaveBeenCalledOnce();
+    expect(mocks.getSlices).not.toHaveBeenCalled();
+  });
+
+  it("loads Sketch once when slices are requested alone", async () => {
     const result = await analyze(["slices"]);
     const design = getStructured(result).designs[0];
 
     expect(design.status).toBe("success");
     expect(design.slices.totalSlices).toBe(0);
-    expect(mocks.getSlices).toHaveBeenCalledOnce();
+    expect(mocks.getSketchJson).toHaveBeenCalledOnce();
+    expect(mocks.getSlices).not.toHaveBeenCalled();
+  });
+
+  it("aggregates multiple successful designs as success", async () => {
+    mockTwoDesigns();
+    mocks.getSketchJson.mockImplementation(async (_client, imageId) =>
+      makeSketchResult(sketchFixture, String(imageId))
+    );
+
+    const result = await analyze(["layers"]);
+    const structured = getStructured(result);
+
+    expect(structured.status).toBe("success");
+    expect(result.isError).toBeUndefined();
+    expect(structured.designs.map((design: Record<string, unknown>) => design.status)).toEqual([
+      "success",
+      "success",
+    ]);
+  });
+
+  it("aggregates mixed design results as partial_success without isError", async () => {
+    mockTwoDesigns();
+    mocks.getSketchJson.mockImplementation(async (_client, imageId) => {
+      if (imageId === "design-2") throw new Error("second sketch unavailable");
+      return makeSketchResult(sketchFixture, String(imageId));
+    });
+
+    const result = await analyze(["layers"]);
+    const structured = getStructured(result);
+
+    expect(structured.status).toBe("partial_success");
+    expect(result.isError).toBeUndefined();
+    expect(structured.designs.map((design: Record<string, unknown>) => design.status)).toEqual([
+      "success",
+      "error",
+    ]);
+  });
+
+  it("aggregates multiple failed designs as error with isError", async () => {
+    mockTwoDesigns();
+    mocks.getSketchJson.mockRejectedValue(new Error("all sketches unavailable"));
+
+    const result = await analyze(["layers"]);
+    const structured = getStructured(result);
+
+    expect(structured.status).toBe("error");
+    expect(result.isError).toBe(true);
+    expect(structured.designs.map((design: Record<string, unknown>) => design.status)).toEqual([
+      "error",
+      "error",
+    ]);
   });
 });

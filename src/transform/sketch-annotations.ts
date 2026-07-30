@@ -1,4 +1,10 @@
 import type { UnknownRecord } from "../shared/types.js";
+import {
+  getSketchLayerFrame,
+  getSketchLayerType,
+  isSketchLayerVisible,
+  resolveSketchStructure,
+} from "./sketch-structure.js";
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -34,7 +40,15 @@ function extractOpacity(layer: UnknownRecord): number {
 }
 
 function extractFillColor(layer: UnknownRecord): string | null {
-  const fill = isRecord(layer.fill) ? layer.fill : {};
+  const style = isRecord(layer.style) ? layer.style : {};
+  const fills = Array.isArray(layer.fills)
+    ? layer.fills.filter(isRecord)
+    : Array.isArray(style.fills)
+      ? style.fills.filter(isRecord)
+      : [];
+  const fill = isRecord(layer.fill)
+    ? layer.fill
+    : fills.find((entry) => entry.isEnabled !== false) ?? {};
   const color = isRecord(fill.color) ? fill.color : null;
   if (!color) return null;
   return rgbaStr(color, extractOpacity(layer));
@@ -133,6 +147,7 @@ export function extractFullAnnotationsFromSketch(
   designScale = 2.0,
 ): string {
   const scale = designScale || 2.0;
+  const structure = resolveSketchStructure(sketchData);
 
   const textLayers: TextEntry[] = [];
   const shapeLayers: ShapeEntry[] = [];
@@ -141,14 +156,15 @@ export function extractFullAnnotationsFromSketch(
 
   const walkLayer = (layer: UnknownRecord, depth = 0, parentPath = ""): void => {
     if (!layer || !isRecord(layer)) return;
-    if (layer.visible === false) return;
+    if (!isSketchLayerVisible(layer)) return;
 
     const name = String(layer.name ?? "?");
-    const ltype = String(layer.type ?? "?");
-    const w = Number(layer.width ?? 0) || 0;
-    const h = Number(layer.height ?? 0) || 0;
-    const left = Number(layer.left ?? 0) || 0;
-    const top = Number(layer.top ?? 0) || 0;
+    const ltype = getSketchLayerType(layer);
+    const frame = getSketchLayerFrame(layer);
+    const w = frame.width;
+    const h = frame.height;
+    const left = frame.x;
+    const top = frame.y;
     const currentPath = parentPath ? `${parentPath}/${name}` : name;
 
     if (w === 0 && h === 0) {
@@ -261,7 +277,7 @@ export function extractFullAnnotationsFromSketch(
       }
 
       shapeLayers.push(entry);
-    } else if (ltype === "layer") {
+    } else if (ltype === "layer" || ltype === "bitmapLayer") {
       if (w > 10 && h > 10) {
         imageLayers.push({
           name,
@@ -273,7 +289,7 @@ export function extractFullAnnotationsFromSketch(
           opacity: opacity < 100 ? opacity : null,
         });
       }
-    } else if (ltype === "layerSection") {
+    } else if (["layerSection", "groupLayer", "symbolInstence"].includes(ltype)) {
       groupStructure.push({
         name,
         depth,
@@ -292,19 +308,15 @@ export function extractFullAnnotationsFromSketch(
 
   const walkArtboardLayer = (layer: UnknownRecord, depth = 0, parentPath = ""): void => {
     if (!layer || !isRecord(layer)) return;
-    if (layer.isVisible === false || layer.visible === false) return;
+    if (!isSketchLayerVisible(layer)) return;
 
     const name = String(layer.name ?? "?");
-    const ltype = String(layer.type ?? "?");
-    const frame = isRecord(layer.frame)
-      ? layer.frame
-      : isRecord(layer.ddsOriginFrame)
-        ? layer.ddsOriginFrame
-        : {};
-    const w = Number(frame.width ?? 0) || 0;
-    const h = Number(frame.height ?? 0) || 0;
-    const left = Number(frame.left ?? frame.x ?? 0) || 0;
-    const top = Number(frame.top ?? frame.y ?? 0) || 0;
+    const ltype = getSketchLayerType(layer);
+    const frame = getSketchLayerFrame(layer);
+    const w = frame.width;
+    const h = frame.height;
+    const left = frame.x;
+    const top = frame.y;
     const currentPath = parentPath ? `${parentPath}/${name}` : name;
 
     if (w === 0 && h === 0) {
@@ -431,12 +443,10 @@ export function extractFullAnnotationsFromSketch(
   };
 
   const board = isRecord(sketchData.board) ? sketchData.board : {};
-  const artboardMeta = isRecord(sketchData.artboard) ? sketchData.artboard : {};
-  const artboardFrame = isRecord(artboardMeta.frame) ? artboardMeta.frame : {};
   const device = String(sketchData.device ?? "");
-  const psdName = String(sketchData.psdName ?? artboardMeta.name ?? "");
-  const boardW = Number(board.width ?? 0) || Number(artboardFrame.width ?? 0);
-  const boardH = Number(board.height ?? 0) || Number(artboardFrame.height ?? 0);
+  const psdName = structure.name;
+  const boardW = structure.width;
+  const boardH = structure.height;
   const boardFill = isRecord(board.fill) ? board.fill : {};
   const boardColor =
     isRecord(boardFill.color) && Object.keys(boardFill.color).length > 0
@@ -457,19 +467,10 @@ export function extractFullAnnotationsFromSketch(
   lines.push(`以下所有尺寸/坐标均为逻辑像素（已除以 @${Math.trunc(scale)}x）`);
   lines.push(dashSep);
 
-  const boardLayers = Array.isArray(board.layers) ? board.layers : [];
-  if (boardLayers.length > 0) {
-    for (const layer of boardLayers) {
-      if (isRecord(layer)) walkLayer(layer);
-    }
+  if (structure.kind === "artboard") {
+    for (const layer of structure.layers) walkArtboardLayer(layer);
   } else {
-    const artboard = isRecord(sketchData.artboard) ? sketchData.artboard : undefined;
-    if (artboard) {
-      const abLayers = Array.isArray(artboard.layers) ? artboard.layers : [];
-      for (const layer of abLayers) {
-        if (isRecord(layer)) walkArtboardLayer(layer);
-      }
-    }
+    for (const layer of structure.layers) walkLayer(layer);
   }
 
   if (groupStructure.length > 0) {

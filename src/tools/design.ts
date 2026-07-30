@@ -3,13 +3,20 @@ import * as z from "zod/v4";
 
 import { config } from "../config.js";
 import { LanhuClient, createLanhuFetch, parseLanhuUrl } from "../lanhu/client.js";
-import { getDesignSchemaJson, getSketchJson, getSlices, listDesigns } from "../lanhu/designs.js";
+import {
+  createSlicesResultFromSketch,
+  getDesignSchemaJson,
+  getSketchJson,
+  getSlices,
+  listDesigns,
+} from "../lanhu/designs.js";
 import { mapConcurrent, withRetry } from "../shared/concurrency.js";
 import { createToolResult } from "../shared/errors.js";
 import { minifyHtml } from "../shared/html.js";
 import type {
   JsonObject,
   LanhuDesignSummary,
+  LanhuSketchJsonResult,
   LanhuSlicesResult,
   ToolContent,
   UnknownRecord,
@@ -85,6 +92,7 @@ interface DesignAnalysisResult {
   designName: string;
   succeededOutputs: Set<IncludeOption>;
   errors: Partial<Record<IncludeOption, string>>;
+  warnings: Partial<Record<IncludeOption, string>>;
   htmlCode?: string;
   htmlSource?: "schema" | "sketch";
   imageUrlMapping?: Record<string, string>;
@@ -280,6 +288,7 @@ export function registerDesignTool(server: McpServer): void {
             designName: design.name,
             succeededOutputs: new Set<IncludeOption>(),
             errors: {},
+            warnings: {},
           };
           let imageContent: ToolContent | undefined;
           const markSuccess = (output: IncludeOption): void => {
@@ -370,9 +379,11 @@ export function registerDesignTool(server: McpServer): void {
 
           const needsSketch = includeSet.has("tokens") ||
             includeSet.has("layers") ||
+            includeSet.has("slices") ||
             (includeSet.has("html") && !analysisResult.succeededOutputs.has("html")) ||
             (includeSet.has("layout") && !analysisResult.succeededOutputs.has("layout"));
 
+          let loadedSketchResult: LanhuSketchJsonResult | undefined;
           let sketch: UnknownRecord | undefined;
           let sketchError: string | undefined;
           if (needsSketch) {
@@ -380,10 +391,10 @@ export function registerDesignTool(server: McpServer): void {
               sketchError = "team_id is required for Sketch extraction.";
             } else {
               try {
-                const sketchResult = await withRetry(
+                loadedSketchResult = await withRetry(
                   () => getSketchJson(client, design.id, teamId, designsResult.params.projectId),
                 );
-                sketch = sketchResult.sketch;
+                sketch = loadedSketchResult.sketch;
               } catch (error) {
                 sketchError = errorMessage(error);
               }
@@ -418,15 +429,22 @@ export function registerDesignTool(server: McpServer): void {
             }
 
             if (includeSet.has("html") && !analysisResult.succeededOutputs.has("html")) {
+              const fallbackReason = analysisResult.errors.html;
               try {
                 const conversion = getSketchConversion();
                 analysisResult.htmlCode = minifyHtml(conversion.html);
                 analysisResult.htmlSource = "sketch";
                 analysisResult.imageUrlMapping = conversion.imageUrlMapping;
+                analysisResult.layerCssAnnotations = conversion.layerAnnotations;
+                analysisResult.sketchAnnotations = extractFullAnnotationsFromSketch(sketch, designScale);
                 if (designImgUrl) {
                   analysisResult.imageUrlMapping["./assets/designs/design.png"] = designImgUrl;
                 }
                 markSuccess("html");
+                if (fallbackReason) {
+                  analysisResult.warnings.html =
+                    `DDS Schema failed: ${fallbackReason}; used Sketch fallback.`;
+                }
               } catch (error) {
                 markError(
                   "html",
@@ -450,10 +468,15 @@ export function registerDesignTool(server: McpServer): void {
             }
 
             if (includeSet.has("layout") && !analysisResult.succeededOutputs.has("layout")) {
+              const fallbackReason = analysisResult.errors.layout;
               try {
                 analysisResult.layoutSummary = extractSketchLayoutSummary(getLayerAnnotations());
                 analysisResult.layoutSource = "sketch";
                 markSuccess("layout");
+                if (fallbackReason) {
+                  analysisResult.warnings.layout =
+                    `DDS Schema failed: ${fallbackReason}; used Sketch fallback.`;
+                }
               } catch (error) {
                 markError(
                   "layout",
@@ -468,6 +491,9 @@ export function registerDesignTool(server: McpServer): void {
             if (includeSet.has("layers")) {
               markError("layers", sketchError);
             }
+            if (includeSet.has("slices")) {
+              markError("slices", sketchError);
+            }
             if (includeSet.has("layout") && !analysisResult.succeededOutputs.has("layout")) {
               markError("layout", combineFallbackErrors(analysisResult.errors.layout, sketchError));
             }
@@ -476,15 +502,9 @@ export function registerDesignTool(server: McpServer): void {
             }
           }
 
-          if (includeSet.has("slices")) {
+          if (includeSet.has("slices") && loadedSketchResult) {
             try {
-              if (!teamId && design.source !== "detailDetach") {
-                throw new Error("team_id is required for slice extraction.");
-              }
-              analysisResult.slices = await withRetry(() => getSlices(
-                client, design.id, teamId, designsResult.params.projectId,
-                true,
-              ));
+              analysisResult.slices = createSlicesResultFromSketch(loadedSketchResult, true);
               markSuccess("slices");
             } catch (error) {
               markError("slices", errorMessage(error));
@@ -507,6 +527,7 @@ export function registerDesignTool(server: McpServer): void {
             analysisResults.push({
               designName: targetDesigns[index]?.name ?? "Unnamed design",
               succeededOutputs: new Set<IncludeOption>(),
+              warnings: {},
               errors: Object.fromEntries(
                 [...includeSet].map((output) => [output, `Design processing failed: ${message}`]),
               ),
@@ -552,7 +573,11 @@ export function registerDesignTool(server: McpServer): void {
           if (includeSet.has("html")) {
             if (result.succeededOutputs.has("html")) {
               if (result.htmlSource === "sketch") {
-                summarySections.push("Using Sketch fallback for HTML.");
+                summarySections.push(
+                  result.warnings.html
+                    ? `Using Sketch fallback for HTML. ${result.warnings.html}`
+                    : "Using Sketch fallback for HTML.",
+                );
               }
               summarySections.push("```html");
               summarySections.push(result.htmlCode ?? "");
@@ -573,6 +598,9 @@ export function registerDesignTool(server: McpServer): void {
             if (result.succeededOutputs.has("layout")) {
               summarySections.push(`\n--- Layout Summary (${result.layoutSource}) ---`);
               summarySections.push(result.layoutSummary || "(no layout entries found)");
+              if (result.warnings.layout) {
+                summarySections.push(`Layout warning: ${result.warnings.layout}`);
+              }
             } else {
               summarySections.push(`Layout failed: ${result.errors.layout}`);
             }
@@ -644,6 +672,7 @@ export function registerDesignTool(server: McpServer): void {
                 : { status: "error", error: result.errors[output] },
             ])),
             errors: result.errors,
+            warnings: result.warnings,
             html_code: result.htmlCode ?? null,
             html_source: result.htmlSource ?? null,
             image_url_mapping: result.imageUrlMapping ?? null,

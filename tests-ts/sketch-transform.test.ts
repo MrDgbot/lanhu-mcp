@@ -7,6 +7,7 @@ import {
   extractSketchLayerAnnotations,
   inferDesignScale,
 } from "../src/transform/sketch-to-html.js";
+import { legacyInfoSketch } from "./fixtures/legacy-sketch.js";
 
 const minimalSketch = {
   device: "iPhone 12 @2x",
@@ -180,6 +181,41 @@ describe("extractSketchLayerAnnotations", () => {
   });
 });
 
+describe("legacy info Sketch", () => {
+  it("renders actual legacy layers into HTML and structured annotations", () => {
+    const result = convertSketchToHtml(legacyInfoSketch, 2.0);
+
+    expect(result.html).toContain("Legacy Home");
+    expect(result.html).toContain("width:375px");
+    expect(result.layerAnnotations.map((annotation) => annotation.name)).toEqual([
+      "Legacy icon",
+      "Legacy card",
+      "Legacy title",
+    ]);
+    expect(result.imageUrlMapping).toEqual({
+      "./assets/slices/Legacy_icon.png": "https://cdn.example.com/legacy-icon.png",
+    });
+  });
+
+  it("produces useful formatted annotations with inferred canvas data", () => {
+    const annotations = extractFullAnnotationsFromSketch(legacyInfoSketch, 2.0);
+
+    expect(annotations).toContain("画布尺寸: 375x667");
+    expect(annotations).toContain("Legacy Home");
+    expect(annotations).not.toContain("画布尺寸: 0x0");
+  });
+
+  it("prefers populated legacy info over an empty board root", () => {
+    const result = convertSketchToHtml({
+      ...legacyInfoSketch,
+      board: { layers: [] },
+    }, 2.0);
+
+    expect(result.html).toContain("Legacy Home");
+    expect(result.layerAnnotations).toHaveLength(3);
+  });
+});
+
 describe("convertSketchToHtmlMinified", () => {
   it("returns minified HTML", () => {
     const result = convertSketchToHtmlMinified(minimalSketch, 2.0);
@@ -320,10 +356,20 @@ describe("edge cases", () => {
     expect(Object.keys(result.imageUrlMapping)).toHaveLength(0);
   });
 
-  it("handles missing board", () => {
-    const result = convertSketchToHtml({}, 2.0);
-    expect(result.html).toContain("<!DOCTYPE html>");
-    expect(result.layerAnnotations).toHaveLength(0);
+  it("rejects an unknown Sketch root", () => {
+    expect(() => convertSketchToHtml({}, 2.0)).toThrow(
+      "Unsupported Sketch structure: expected board.layers, artboard.layers, or info array.",
+    );
+  });
+
+  it("rejects visible layer data that cannot be rendered", () => {
+    expect(() => convertSketchToHtml({
+      board: {
+        layers: [{ type: "layerSection", name: "unsupported", visible: true }],
+      },
+    }, 2.0)).toThrow(
+      "Unsupported Sketch board layer structure: found visible layer data but no renderable layers.",
+    );
   });
 
   it("handles zero-sized layers by flattening children", () => {
@@ -363,9 +409,9 @@ describe("edge cases", () => {
     expect(result.layerAnnotations[0].text).toBe("Nested");
   });
 
-  it("annotations handle missing board gracefully", () => {
-    const annotations = extractFullAnnotationsFromSketch({}, 2.0);
-    expect(annotations).toContain("设计标注信息");
-    expect(annotations).toContain("0x0");
+  it("annotations reject an unknown Sketch root", () => {
+    expect(() => extractFullAnnotationsFromSketch({}, 2.0)).toThrow(
+      "Unsupported Sketch structure: expected board.layers, artboard.layers, or info array.",
+    );
   });
 });

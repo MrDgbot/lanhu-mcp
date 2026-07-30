@@ -4,6 +4,7 @@ import {
   extractLayerTree,
   extractLayerTreeResult,
 } from "../src/transform/design-tokens.js";
+import { legacyInfoSketch } from "./fixtures/legacy-sketch.js";
 
 const artboardSketch = {
   artboard: {
@@ -121,8 +122,14 @@ describe("extractDesignTokens (refactored)", () => {
   });
 
   it("returns empty string for empty sketch", () => {
-    const tokens = extractDesignTokens({});
+    const tokens = extractDesignTokens({ board: { layers: [] } });
     expect(tokens).toBe("");
+  });
+
+  it("rejects an unknown Sketch root", () => {
+    expect(() => extractDesignTokens({ unexpected: [] })).toThrow(
+      "Unsupported Sketch structure: expected board.layers, artboard.layers, or info array.",
+    );
   });
 });
 
@@ -184,5 +191,21 @@ describe("extractLayerTree", () => {
 
     expect(result.tree).toContain("Board: Detached (750x1334)");
     expect(result.tree).toContain("shapeLayer: Background");
+  });
+
+  it("supports legacy info-format Sketch data", () => {
+    const result = extractLayerTreeResult(legacyInfoSketch);
+
+    expect(result.tree).toContain("Legacy Sketch: legacy-home.psd (750x1334)");
+    expect(result.tree).toContain("textLayer: Legacy title");
+    expect(result.tree).toContain("bitmapLayer: Legacy icon");
+  });
+
+  it("returns only top-level layers at depth 0", () => {
+    const result = extractLayerTreeResult(legacyInfoSketch, 0);
+
+    expect(result.tree).toContain("groupLayer: Content");
+    expect(result.tree).not.toContain("textLayer: Legacy title");
+    expect(result.truncated).toBe(true);
   });
 });

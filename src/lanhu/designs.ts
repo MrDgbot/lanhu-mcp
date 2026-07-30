@@ -20,6 +20,10 @@ import {
   type LanhuVersionInfo,
   type UnknownRecord,
 } from "../shared/types.js";
+import {
+  getSketchLayerFrame,
+  resolveSketchStructure,
+} from "../transform/sketch-structure.js";
 
 const DETAIL_COVER_KEYS = [
   "XDCoverPNGORG",
@@ -192,8 +196,7 @@ function buildSliceInfo(
     return undefined;
   }
 
-  const left = asNumber(node.left) ?? 0;
-  const top = asNumber(node.top) ?? 0;
+  const frame = getSketchLayerFrame(node);
   return {
     id: asString(node.id),
     name: currentName,
@@ -201,14 +204,17 @@ function buildSliceInfo(
     downloadUrl,
     size: asString(legacyImage.size) ?? "unknown",
     format: "png",
-    position: { x: Math.trunc(left), y: Math.trunc(top) },
+    position: { x: Math.trunc(frame.x), y: Math.trunc(frame.y) },
     parentName: parentName || undefined,
     layerPath: currentPath,
     ...(includeMetadata ? { metadata: collectMetadata(node) } : {}),
   };
 }
 
-function extractSlicesFromSketch(sketch: UnknownRecord, includeMetadata: boolean): LanhuSliceInfo[] {
+export function extractSlicesFromSketch(
+  sketch: UnknownRecord,
+  includeMetadata = true,
+): LanhuSliceInfo[] {
   const slices: LanhuSliceInfo[] = [];
   const visited = new Set<unknown>();
 
@@ -243,20 +249,29 @@ function extractSlicesFromSketch(sketch: UnknownRecord, includeMetadata: boolean
     }
   };
 
-  const artboard = isRecord(sketch.artboard) ? sketch.artboard : undefined;
-  if (artboard && Array.isArray(artboard.layers)) {
-    for (const layer of artboard.layers) {
-      walk(layer);
-    }
-    return slices;
-  }
-
-  const legacyRoot = Array.isArray(sketch.info) ? sketch.info : [];
-  for (const item of legacyRoot) {
-    walk(item);
-  }
+  const structure = resolveSketchStructure(sketch);
+  for (const layer of structure.layers) walk(layer);
 
   return slices;
+}
+
+export function createSlicesResultFromSketch(
+  sketchResult: LanhuSketchJsonResult,
+  includeMetadata = true,
+): LanhuSlicesResult {
+  const latestVersion = getLatestVersionInfo(sketchResult.documentInfo);
+  const slices = extractSlicesFromSketch(sketchResult.sketch, includeMetadata);
+  return {
+    designId: sketchResult.imageId,
+    designName: asString(sketchResult.documentInfo.name) ?? `design-${sketchResult.imageId}`,
+    version: asString(latestVersion?.version_info),
+    canvasSize: {
+      width: asNumber(sketchResult.documentInfo.width),
+      height: asNumber(sketchResult.documentInfo.height),
+    },
+    totalSlices: slices.length,
+    slices,
+  };
 }
 
 function requireVersionId(images: LanhuProjectMultiInfoImage[], imageId: string): string {
@@ -396,18 +411,5 @@ export async function getSlices(
   includeMetadata = true,
 ): Promise<LanhuSlicesResult> {
   const sketchResult = await getSketchJson(client, imageId, teamId, projectId);
-  const latestVersion = getLatestVersionInfo(sketchResult.documentInfo);
-  const slices = extractSlicesFromSketch(sketchResult.sketch, includeMetadata);
-
-  return {
-    designId: imageId,
-    designName: asString(sketchResult.documentInfo.name) ?? `design-${imageId}`,
-    version: asString(latestVersion?.version_info),
-    canvasSize: {
-      width: asNumber(sketchResult.documentInfo.width),
-      height: asNumber(sketchResult.documentInfo.height),
-    },
-    totalSlices: slices.length,
-    slices,
-  };
+  return createSlicesResultFromSketch(sketchResult, includeMetadata);
 }
