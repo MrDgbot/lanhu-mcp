@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { legacyInfoSketch } from "./fixtures/legacy-sketch.js";
+import {
+  legacyInfoSketch,
+  unrecognizedLegacyTextSketch,
+} from "./fixtures/legacy-sketch.js";
 
 const mocks = vi.hoisted(() => ({
   getDesignSchemaJson: vi.fn(),
@@ -247,24 +250,34 @@ describe("lanhu_design analyze output status", () => {
     expect(mocks.getSketchJson).toHaveBeenCalledOnce();
   });
 
-  it("analyzes legacy info layers and produces a non-empty Sketch layout", async () => {
+  it("analyzes production-shaped legacy text across all Sketch-derived outputs", async () => {
     mockDesignList("detailDetach");
     mocks.getSketchJson.mockResolvedValue(makeSketchResult(legacyInfoSketch));
 
-    const result = await analyze(["layout", "layers"]);
+    const result = await analyze(["html", "layout", "layers", "tokens"]);
     const design = getStructured(result).designs[0];
 
     expect(design.status).toBe("success");
+    expect(design.outputs.html.status).toBe("success");
+    expect(design.outputs.layout.status).toBe("success");
+    expect(design.outputs.layers.status).toBe("success");
+    expect(design.outputs.tokens.status).toBe("success");
+    expect(design.html_code).toMatch(/<div[^>]*>15s<\/div>/);
     expect(design.layout_source).toBe("sketch");
-    expect(design.layout_summary).toContain("Legacy title");
-    expect(design.layer_tree).toContain("textLayer: Legacy title");
+    expect(design.layout_summary).toContain('"15s" 15s');
+    expect(design.layer_tree).toContain("textLayer: 15s");
     expect(design.layer_annotations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: "Legacy title", text: "Legacy Home" }),
+        expect.objectContaining({ name: "15s", text: "15s" }),
         expect.objectContaining({ name: "Legacy icon" }),
       ]),
     );
     expect(design.sketch_annotations).toContain("画布尺寸: 375x667");
+    expect(design.sketch_annotations).toContain("font-family: SF Pro Display");
+    expect(design.design_tokens).toContain("Fonts");
+    expect(design.design_tokens).toContain("SF Pro Display");
+    expect(design.design_tokens).toContain("rgba(30,30,30,1)");
+    expect(mocks.getSketchJson).toHaveBeenCalledOnce();
   });
 
   it("keeps annotations and the Schema failure reason for HTML-only Sketch fallback", async () => {
@@ -278,12 +291,36 @@ describe("lanhu_design analyze output status", () => {
     expect(result.isError).toBeUndefined();
     expect(design.status).toBe("success");
     expect(design.html_source).toBe("sketch");
-    expect(design.html_code).toContain("Legacy Home");
+    expect(design.html_code).toMatch(/<div[^>]*>15s<\/div>/);
     expect(design.layer_annotations).toHaveLength(3);
-    expect(design.sketch_annotations).toContain("Legacy Home");
+    expect(design.sketch_annotations).toContain('"15s"');
     expect(design.errors).toEqual({});
     expect(design.warnings.html).toContain("schema unavailable");
     expect(getText(result)).toContain("schema unavailable");
+  });
+
+  it("returns concrete warnings when a visible legacy textLayer cannot be parsed", async () => {
+    mockDesignList("detailDetach");
+    mocks.getSketchJson.mockResolvedValue(makeSketchResult(unrecognizedLegacyTextSketch));
+
+    const result = await analyze(["html", "layout", "layers", "tokens"]);
+    const design = getStructured(result).designs[0];
+    const warning = "textInfo array contains no string text values";
+
+    expect(design.status).toBe("success");
+    expect(design.html_code).not.toMatch(/>Layer name is not content<\/div>/);
+    expect(design.layer_annotations[0].text).toBeUndefined();
+    expect(design.sketch_annotations).toContain("文本解析警告");
+    expect(design.warnings.html).toContain(warning);
+    expect(design.warnings.layout).toContain(warning);
+    expect(design.warnings.layers).toContain(warning);
+    expect(design.warnings.tokens).toContain(warning);
+    expect(design.outputs.html.warning).toContain(warning);
+    expect(design.outputs.layout.warning).toContain(warning);
+    expect(design.outputs.layers.warning).toContain(warning);
+    expect(design.outputs.tokens.warning).toContain(warning);
+    expect(getText(result)).toContain(warning);
+    expect(getText(result)).not.toContain("Failed: Unknown");
   });
 
   it("returns a concrete error for an unknown Sketch root", async () => {

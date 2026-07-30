@@ -6,6 +6,11 @@ import {
   hasVisibleSketchLayerData,
   resolveSketchStructure,
 } from "./sketch-structure.js";
+import {
+  collectSketchTextWarnings,
+  normalizeSketchTextLayer,
+  sketchColorToCss,
+} from "./sketch-text.js";
 
 export interface LayerAnnotation {
   name: string;
@@ -19,6 +24,7 @@ export interface SketchToHtmlResult {
   html: string;
   imageUrlMapping: Record<string, string>;
   layerAnnotations: LayerAnnotation[];
+  warnings: string[];
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -31,13 +37,7 @@ function px(value: unknown, scale: number): number {
 }
 
 function colorCss(c: unknown, opacity = 100): string | null {
-  if (!c || !isRecord(c)) return null;
-  if (typeof c.value === "string") return c.value;
-  const r = Math.round(Number(c.red ?? c.r ?? 0));
-  const g = Math.round(Number(c.green ?? c.g ?? 0));
-  const b = Math.round(Number(c.blue ?? c.b ?? 0));
-  const a = opacity < 100 ? Math.round((opacity / 100) * 100) / 100 : 1;
-  return a < 1 ? `rgba(${r},${g},${b},${a})` : `rgb(${r},${g},${b})`;
+  return isRecord(c) ? sketchColorToCss(c, opacity) ?? null : null;
 }
 
 function getOpacity(layer: UnknownRecord): number {
@@ -109,12 +109,6 @@ function extractBorder(effects: UnknownRecord, scale: number): string | null {
   const c = isRecord(s.color) ? s.color : {};
   const color = colorCss(c);
   return color ? `${size}px solid ${color}` : null;
-}
-
-function parseFontWeight(styleName: unknown): number | null {
-  if (typeof styleName !== "string" || !styleName) return null;
-  const m = styleName.match(/(\d+)/);
-  return m ? Number(m[1]) : null;
 }
 
 function safeAttr(text: string): string {
@@ -204,10 +198,6 @@ function flattenArtboardLayers(rawLayers: unknown[], scale: number): FlatLayer[]
       return;
     }
 
-    const textObj = isRecord(layer.text) ? layer.text : {};
-    const textStyle = isRecord(textObj.style) ? textObj.style : {};
-    const fontObj = isRecord(textStyle.font) ? textStyle.font : {};
-
     const mapped: UnknownRecord = {
       ...layer,
       left: frameX,
@@ -216,22 +206,6 @@ function flattenArtboardLayers(rawLayers: unknown[], scale: number): FlatLayer[]
       height: frame.height ?? 0,
       __visible: true,
     };
-
-    if (ltype === "textLayer" && Object.keys(fontObj).length > 0) {
-      const colorObj = isRecord(textStyle.color) ? textStyle.color : {};
-      mapped.textInfo = {
-        text: String(textObj.value ?? ""),
-        color: Object.keys(colorObj).length > 0 ? colorObj : undefined,
-        size: fontObj.size ?? 0,
-        fontPostScriptName: fontObj.name ?? fontObj.postScriptName,
-        fontName: fontObj.name,
-        fontStyleName: fontObj.type ?? "",
-        bold: fontObj.bold ?? false,
-        italic: fontObj.italic ?? false,
-        justification: fontObj.align ?? "left",
-        leading: isRecord(fontObj.lineHeight) ? fontObj.lineHeight.value : fontObj.lineHeight,
-      };
-    }
 
     result.push(mapped as FlatLayer);
   };
@@ -283,26 +257,6 @@ function flattenLegacyInfoLayers(rawLayers: unknown[]): FlatLayer[] {
       };
     }
 
-    if (!isRecord(mapped.textInfo)) {
-      const text = isRecord(layer.text) ? layer.text : {};
-      const textStyle = isRecord(text.style) ? text.style : {};
-      const font = isRecord(textStyle.font) ? textStyle.font : {};
-      if (text.value != null || Object.keys(font).length > 0) {
-        mapped.type = "textLayer";
-        mapped.textInfo = {
-          text: String(text.value ?? ""),
-          color: isRecord(textStyle.color) ? textStyle.color : undefined,
-          size: font.size ?? 0,
-          fontPostScriptName: font.name ?? font.postScriptName,
-          fontName: font.name,
-          fontStyleName: font.type ?? "",
-          bold: font.bold ?? false,
-          italic: font.italic ?? false,
-          justification: font.align ?? "left",
-        };
-      }
-    }
-
     if (!isRecord(mapped.fill)) {
       const style = isRecord(layer.style) ? layer.style : {};
       const fills = Array.isArray(layer.fills)
@@ -348,6 +302,7 @@ function analyzeSketch(
   const htmlParts: string[] = [];
   const imageUrlMapping: Record<string, string> = {};
   const layerAnnotations: LayerAnnotation[] = [];
+  const warnings = collectSketchTextWarnings(sketchData);
 
   for (let idx = 0; idx < layers.length; idx++) {
     const L = layers[idx];
@@ -419,54 +374,61 @@ function analyzeSketch(
       annot.slice_url = sliceUrl;
     }
 
-    if (ltype === "textLayer" && isRecord(L.textInfo)) {
-      const ti = L.textInfo as UnknownRecord;
-      textContent = String(ti.text ?? "");
-      annot.text = textContent;
+    if (ltype === "textLayer") {
+      const normalized = normalizeSketchTextLayer(L).value;
+      const textStyle = normalized?.style ?? {};
+      textContent = normalized?.text ?? "";
+      if (normalized) annot.text = textContent;
       props.push("z-index:10");
-      const textColor = colorCss(ti.color, opacity);
+      const textColor = colorCss(textStyle.color, opacity);
       if (textColor) {
         props.push(`color:${textColor}`);
         annot.css.color = textColor;
       }
-      const fontSize = px(ti.size ?? 0, scale);
+      const fontSize = px(textStyle.fontSize ?? 0, scale);
       if (fontSize) {
         props.push(`font-size:${fontSize}px`);
         annot.css["font-size"] = `${fontSize}px`;
       }
-      const fontName = String(ti.fontPostScriptName ?? ti.fontName ?? "");
+      const fontName = normalized?.fontName ?? "";
       if (fontName) {
         props.push(
           `font-family:"${fontName}","PingFang SC","Microsoft YaHei","Hiragino Sans GB",sans-serif`,
         );
         annot.css["font-family"] = fontName;
       }
-      const fontStyleName = String(ti.fontStyleName ?? "");
-      const fw = parseFontWeight(fontStyleName);
-      if (fw) {
-        props.push(`font-weight:${fw}`);
-        annot.css["font-weight"] = String(fw);
-      } else if (fontStyleName) {
-        annot.css["font-weight"] = fontStyleName;
+      if (textStyle.fontWeight !== undefined) {
+        const fontWeight = String(textStyle.fontWeight);
+        props.push(`font-weight:${fontWeight}`);
+        annot.css["font-weight"] = fontWeight;
       }
-      if (ti.bold && !fw) {
-        props.push("font-weight:bold");
-      }
-      if (ti.italic) {
+      if (textStyle.italic) {
         props.push("font-style:italic");
+        annot.css["font-style"] = "italic";
       }
-      const just = String(ti.justification ?? "left");
+      const just = textStyle.alignment ?? "left";
       if (just !== "left") {
         props.push(`text-align:${just}`);
         annot.css["text-align"] = just;
       }
-      const lines = textContent.split("\r").filter(Boolean);
+      const normalizedLineHeight = px(textStyle.lineHeight ?? 0, scale);
+      const letterSpacing = px(textStyle.letterSpacing ?? 0, scale);
+      if (letterSpacing) {
+        props.push(`letter-spacing:${letterSpacing}px`);
+        annot.css["letter-spacing"] = `${letterSpacing}px`;
+      }
+      const lines = textContent.split(/\r\n|\r|\n/).filter(Boolean);
       const lineCount = Math.max(lines.length, 1);
-      if (lineCount > 1 && h > 0 && fontSize > 0) {
+      if (normalizedLineHeight) {
+        props.push(`line-height:${normalizedLineHeight}px`);
+        annot.css["line-height"] = `${normalizedLineHeight}px`;
+      } else if (lineCount > 1 && h > 0 && fontSize > 0) {
         const lh = Math.round((h / lineCount) * 10) / 10;
         props.push(`line-height:${lh}px`);
+        annot.css["line-height"] = `${lh}px`;
       } else {
         props.push("line-height:1");
+        annot.css["line-height"] = "1";
       }
       props.push("white-space:pre-wrap");
       props.push("overflow:hidden");
@@ -523,14 +485,21 @@ function analyzeSketch(
       `\n</div></body></html>`
     : "";
 
-  return { html, imageUrlMapping, layerAnnotations };
+  return { html, imageUrlMapping, layerAnnotations, warnings };
+}
+
+export function extractSketchLayerAnalysis(
+  sketchData: UnknownRecord,
+  designScale = 2.0,
+): SketchToHtmlResult {
+  return analyzeSketch(sketchData, designScale, "", false);
 }
 
 export function extractSketchLayerAnnotations(
   sketchData: UnknownRecord,
   designScale = 2.0,
 ): LayerAnnotation[] {
-  return analyzeSketch(sketchData, designScale, "", false).layerAnnotations;
+  return extractSketchLayerAnalysis(sketchData, designScale).layerAnnotations;
 }
 
 export function convertSketchToHtml(

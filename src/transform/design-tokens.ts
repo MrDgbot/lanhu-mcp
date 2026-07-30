@@ -6,6 +6,11 @@ import {
   isSketchLayerVisible,
   resolveSketchStructure,
 } from "./sketch-structure.js";
+import {
+  normalizeSketchTextLayer,
+  sketchColorToCss,
+  type NormalizedSketchTextStyle,
+} from "./sketch-text.js";
 
 function asNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -132,9 +137,7 @@ export function extractLayerTreeResult(
     let line = `${"  ".repeat(depth)}${type}: ${name} (${Math.round(dimensions.w)}x${Math.round(dimensions.h)} @${Math.round(dimensions.x)},${Math.round(dimensions.y)})`;
 
     if (type === "textLayer") {
-      const text = isRecord(layer.text) ? layer.text : {};
-      const textInfo = isRecord(layer.textInfo) ? layer.textInfo : {};
-      const rawValue = asString(text.value) || asString(textInfo.text);
+      const rawValue = normalizeSketchTextLayer(layer).value?.text ?? "";
       const clipped = rawValue.length > 40 ? `${rawValue.slice(0, 40)}...` : rawValue;
       if (clipped) {
         line += ` "${clipped}"`;
@@ -178,13 +181,19 @@ export function extractLayerTree(sketch: UnknownRecord, maxDepth: LayerDepth = 4
   return extractLayerTreeResult(sketch, maxDepth).tree;
 }
 
-export function extractDesignTokens(sketch: UnknownRecord): string {
+export interface DesignTokensResult {
+  tokens: string;
+  warnings: string[];
+}
+
+export function extractDesignTokensResult(sketch: UnknownRecord): DesignTokensResult {
   const colors = new Map<string, number>();
   const fonts = new Map<string, number>();
   const gradients = new Map<string, number>();
   const shadows = new Map<string, number>();
   const radii = new Map<string, number>();
   const borders = new Map<string, number>();
+  const warnings = new Set<string>();
 
   const addTo = (map: Map<string, number>, key: string): void => {
     map.set(key, (map.get(key) ?? 0) + 1);
@@ -192,19 +201,18 @@ export function extractDesignTokens(sketch: UnknownRecord): string {
 
   const collectColor = (colorObj: unknown): void => {
     if (!isRecord(colorObj)) return;
-    const v = asString(colorObj.value);
-    if (v && !v.includes("undefined") && !v.includes("NaN")) addTo(colors, v);
+    const value = sketchColorToCss(colorObj);
+    if (value && !value.includes("undefined") && !value.includes("NaN")) addTo(colors, value);
   };
 
-  const collectFont = (fontObj: unknown): void => {
-    if (!isRecord(fontObj)) return;
-    const name = asString(fontObj.name);
-    const type = asString(fontObj.type);
-    const size = asNumber(fontObj.size);
+  const collectFont = (style: NormalizedSketchTextStyle): void => {
+    const name = style.fontFamily ?? style.fontPostScriptName ?? "";
+    const weight = style.fontWeight;
+    const size = style.fontSize ?? 0;
     if (!name && !size) return;
     const parts: string[] = [];
     if (name) parts.push(name);
-    if (type) parts.push(type);
+    if (weight !== undefined) parts.push(String(weight));
     if (size) parts.push(`${size}px`);
     addTo(fonts, parts.join(" / "));
   };
@@ -256,18 +264,14 @@ export function extractDesignTokens(sketch: UnknownRecord): string {
       addTo(radii, `${layer.radius}px`);
     }
 
-    // Collect font and text color from artboard textLayer format
-    if (asString(layer.type) === "textLayer") {
-      const text = isRecord(layer.text) ? layer.text : {};
-      const textStyle = isRecord(text.style) ? text.style : {};
-      if (isRecord(textStyle.color)) collectColor(textStyle.color);
-      if (isRecord(textStyle.font)) collectFont(textStyle.font);
-
-      // Board format: textInfo array
-      const textInfoList = Array.isArray(layer.textInfo) ? layer.textInfo.filter(isRecord) : [];
-      for (const ti of textInfoList) {
-        if (isRecord(ti.color)) collectColor(ti.color);
-        if (isRecord(ti.font)) collectFont(ti.font);
+    if (getSketchLayerType(layer) === "textLayer") {
+      const normalized = normalizeSketchTextLayer(layer);
+      for (const warning of normalized.warnings) warnings.add(warning);
+      if (normalized.value) {
+        for (const run of normalized.value.runs) {
+          collectColor(run.color);
+          collectFont(run);
+        }
       }
     }
 
@@ -299,6 +303,12 @@ export function extractDesignTokens(sketch: UnknownRecord): string {
     formatSection("Border Radius", radii),
   ].filter(Boolean);
 
-  if (sections.length === 0) return "";
-  return `=== Design Tokens ===\n\n${sections.join("\n\n")}`;
+  const tokens = sections.length === 0
+    ? ""
+    : `=== Design Tokens ===\n\n${sections.join("\n\n")}`;
+  return { tokens, warnings: [...warnings] };
+}
+
+export function extractDesignTokens(sketch: UnknownRecord): string {
+  return extractDesignTokensResult(sketch).tokens;
 }

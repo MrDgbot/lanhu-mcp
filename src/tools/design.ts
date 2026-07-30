@@ -23,6 +23,7 @@ import type {
 } from "../shared/types.js";
 import {
   extractDesignTokens,
+  extractDesignTokensResult,
   extractLayerTreeResult,
   type LayerDepth,
 } from "../transform/design-tokens.js";
@@ -31,7 +32,7 @@ import { convertSchemaToHtml, localizeImageUrls } from "../transform/schema-to-h
 import { extractFullAnnotationsFromSketch } from "../transform/sketch-annotations.js";
 import {
   convertSketchToHtml,
-  extractSketchLayerAnnotations,
+  extractSketchLayerAnalysis,
   inferDesignScale,
 } from "../transform/sketch-to-html.js";
 import type { LayerAnnotation } from "../transform/sketch-to-html.js";
@@ -300,6 +301,15 @@ export function registerDesignTool(server: McpServer): void {
               analysisResult.errors[output] = message;
             }
           };
+          const addWarning = (output: IncludeOption, message: string): void => {
+            const current = analysisResult.warnings[output];
+            analysisResult.warnings[output] = current ? `${current} ${message}` : message;
+          };
+          const addTextWarnings = (output: IncludeOption, warnings: string[]): void => {
+            if (warnings.length > 0) {
+              addWarning(output, `Sketch text warnings: ${warnings.join(" ")}`);
+            }
+          };
 
           // Download cover image (only if requested)
           if (includeSet.has("image")) {
@@ -408,21 +418,26 @@ export function registerDesignTool(server: McpServer): void {
             const designScale = inferDesignScale(String(sketch.device ?? ""));
             const designImgUrl = design.url?.split("?")[0] ?? "";
             let sketchConversion: ReturnType<typeof convertSketchToHtml> | undefined;
-            let layerAnnotations: LayerAnnotation[] | undefined;
+            let sketchLayerAnalysis: ReturnType<typeof extractSketchLayerAnalysis> | undefined;
             const getSketchConversion = (): ReturnType<typeof convertSketchToHtml> => {
               sketchConversion ??= convertSketchToHtml(sketch, designScale, designImgUrl);
-              layerAnnotations ??= sketchConversion.layerAnnotations;
               return sketchConversion;
             };
+            const getLayerAnalysis = (): ReturnType<typeof extractSketchLayerAnalysis> => {
+              if (sketchConversion) return sketchConversion;
+              sketchLayerAnalysis ??= extractSketchLayerAnalysis(sketch, designScale);
+              return sketchLayerAnalysis;
+            };
             const getLayerAnnotations = (): LayerAnnotation[] => {
-              layerAnnotations ??= extractSketchLayerAnnotations(sketch, designScale);
-              return layerAnnotations;
+              return getLayerAnalysis().layerAnnotations;
             };
 
             if (includeSet.has("tokens")) {
               try {
-                analysisResult.designTokens = extractDesignTokens(sketch);
+                const tokenResult = extractDesignTokensResult(sketch);
+                analysisResult.designTokens = tokenResult.tokens;
                 markSuccess("tokens");
+                addTextWarnings("tokens", tokenResult.warnings);
               } catch (error) {
                 markError("tokens", errorMessage(error));
               }
@@ -442,9 +457,9 @@ export function registerDesignTool(server: McpServer): void {
                 }
                 markSuccess("html");
                 if (fallbackReason) {
-                  analysisResult.warnings.html =
-                    `DDS Schema failed: ${fallbackReason}; used Sketch fallback.`;
+                  addWarning("html", `DDS Schema failed: ${fallbackReason}; used Sketch fallback.`);
                 }
+                addTextWarnings("html", conversion.warnings);
               } catch (error) {
                 markError(
                   "html",
@@ -462,6 +477,7 @@ export function registerDesignTool(server: McpServer): void {
                 analysisResult.layerCssAnnotations = getLayerAnnotations();
                 analysisResult.sketchAnnotations = extractFullAnnotationsFromSketch(sketch, designScale);
                 markSuccess("layers");
+                addTextWarnings("layers", getLayerAnalysis().warnings);
               } catch (error) {
                 markError("layers", errorMessage(error));
               }
@@ -470,13 +486,14 @@ export function registerDesignTool(server: McpServer): void {
             if (includeSet.has("layout") && !analysisResult.succeededOutputs.has("layout")) {
               const fallbackReason = analysisResult.errors.layout;
               try {
-                analysisResult.layoutSummary = extractSketchLayoutSummary(getLayerAnnotations());
+                const layerAnalysis = getLayerAnalysis();
+                analysisResult.layoutSummary = extractSketchLayoutSummary(layerAnalysis.layerAnnotations);
                 analysisResult.layoutSource = "sketch";
                 markSuccess("layout");
                 if (fallbackReason) {
-                  analysisResult.warnings.layout =
-                    `DDS Schema failed: ${fallbackReason}; used Sketch fallback.`;
+                  addWarning("layout", `DDS Schema failed: ${fallbackReason}; used Sketch fallback.`);
                 }
+                addTextWarnings("layout", layerAnalysis.warnings);
               } catch (error) {
                 markError(
                   "layout",
@@ -626,6 +643,9 @@ export function registerDesignTool(server: McpServer): void {
                 summarySections.push("\n--- Sketch Annotations ---");
                 summarySections.push(result.sketchAnnotations);
               }
+              if (result.warnings.layers) {
+                summarySections.push(`Layers warning: ${result.warnings.layers}`);
+              }
             } else {
               summarySections.push(`Layers failed: ${result.errors.layers}`);
             }
@@ -635,6 +655,9 @@ export function registerDesignTool(server: McpServer): void {
             if (result.succeededOutputs.has("tokens")) {
               summarySections.push("\n--- Design Tokens ---");
               summarySections.push(result.designTokens || "(no tokens found)");
+              if (result.warnings.tokens) {
+                summarySections.push(`Tokens warning: ${result.warnings.tokens}`);
+              }
             } else {
               summarySections.push(`Tokens failed: ${result.errors.tokens}`);
             }
@@ -668,7 +691,10 @@ export function registerDesignTool(server: McpServer): void {
             outputs: Object.fromEntries([...includeSet].map((output) => [
               output,
               result.succeededOutputs.has(output)
-                ? { status: "success" }
+                ? {
+                    status: "success",
+                    ...(result.warnings[output] ? { warning: result.warnings[output] } : {}),
+                  }
                 : { status: "error", error: result.errors[output] },
             ])),
             errors: result.errors,

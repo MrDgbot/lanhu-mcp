@@ -131,6 +131,17 @@ describe("extractDesignTokens (refactored)", () => {
       "Unsupported Sketch structure: expected board.layers, artboard.layers, or info array.",
     );
   });
+
+  it("extracts font and text color tokens from legacy textInfo runs", () => {
+    const tokens = extractDesignTokens(legacyInfoSketch);
+
+    expect(tokens).toContain("Fonts");
+    expect(tokens).toContain("SF Pro Display");
+    expect(tokens).toContain("600");
+    expect(tokens).toContain("32px");
+    expect(tokens).toContain("Colors");
+    expect(tokens).toContain("rgba(30,30,30,1)");
+  });
 });
 
 describe("extractLayerTree", () => {
@@ -197,7 +208,8 @@ describe("extractLayerTree", () => {
     const result = extractLayerTreeResult(legacyInfoSketch);
 
     expect(result.tree).toContain("Legacy Sketch: legacy-home.psd (750x1334)");
-    expect(result.tree).toContain("textLayer: Legacy title");
+    expect(result.tree).toContain('textLayer: 15s');
+    expect(result.tree).toContain('"15s"');
     expect(result.tree).toContain("bitmapLayer: Legacy icon");
   });
 
@@ -205,7 +217,7 @@ describe("extractLayerTree", () => {
     const result = extractLayerTreeResult(legacyInfoSketch, 0);
 
     expect(result.tree).toContain("groupLayer: Content");
-    expect(result.tree).not.toContain("textLayer: Legacy title");
+    expect(result.tree).not.toContain("textLayer: 15s");
     expect(result.truncated).toBe(true);
   });
 });

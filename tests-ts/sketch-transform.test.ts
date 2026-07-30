@@ -7,7 +7,10 @@ import {
   extractSketchLayerAnnotations,
   inferDesignScale,
 } from "../src/transform/sketch-to-html.js";
-import { legacyInfoSketch } from "./fixtures/legacy-sketch.js";
+import {
+  legacyInfoSketch,
+  unrecognizedLegacyTextSketch,
+} from "./fixtures/legacy-sketch.js";
 
 const minimalSketch = {
   device: "iPhone 12 @2x",
@@ -185,13 +188,28 @@ describe("legacy info Sketch", () => {
   it("renders actual legacy layers into HTML and structured annotations", () => {
     const result = convertSketchToHtml(legacyInfoSketch, 2.0);
 
-    expect(result.html).toContain("Legacy Home");
+    expect(result.html).toMatch(/<div[^>]*>15s<\/div>/);
     expect(result.html).toContain("width:375px");
     expect(result.layerAnnotations.map((annotation) => annotation.name)).toEqual([
       "Legacy icon",
       "Legacy card",
-      "Legacy title",
+      "15s",
     ]);
+    const textAnnotation = result.layerAnnotations.find((annotation) => annotation.type === "textLayer");
+    expect(textAnnotation).toMatchObject({
+      name: "15s",
+      text: "15s",
+      css: {
+        color: "rgba(30,30,30,1)",
+        "font-size": "16px",
+        "font-family": "SF Pro Display",
+        "font-weight": "600",
+        "text-align": "center",
+        "line-height": "20px",
+        "letter-spacing": "0.6px",
+      },
+    });
+    expect(result.warnings).toEqual([]);
     expect(result.imageUrlMapping).toEqual({
       "./assets/slices/Legacy_icon.png": "https://cdn.example.com/legacy-icon.png",
     });
@@ -201,7 +219,9 @@ describe("legacy info Sketch", () => {
     const annotations = extractFullAnnotationsFromSketch(legacyInfoSketch, 2.0);
 
     expect(annotations).toContain("画布尺寸: 375x667");
-    expect(annotations).toContain("Legacy Home");
+    expect(annotations).toContain('"15s"');
+    expect(annotations).toContain("font-size: 16px");
+    expect(annotations).toContain("font-family: SF Pro Display");
     expect(annotations).not.toContain("画布尺寸: 0x0");
   });
 
@@ -211,8 +231,22 @@ describe("legacy info Sketch", () => {
       board: { layers: [] },
     }, 2.0);
 
-    expect(result.html).toContain("Legacy Home");
+    expect(result.html).toMatch(/<div[^>]*>15s<\/div>/);
     expect(result.layerAnnotations).toHaveLength(3);
+  });
+
+  it("warns instead of using a layer name for unrecognized visible text", () => {
+    const result = convertSketchToHtml(unrecognizedLegacyTextSketch, 2.0);
+    const annotations = extractFullAnnotationsFromSketch(unrecognizedLegacyTextSketch, 2.0);
+
+    expect(result.html).not.toMatch(/>Layer name is not content<\/div>/);
+    expect(result.layerAnnotations[0].text).toBeUndefined();
+    expect(result.warnings).toEqual([
+      "Unsupported visible textLayer \"Layer name is not content\": " +
+        "textInfo array contains no string text values.",
+    ]);
+    expect(annotations).toContain("文本解析警告");
+    expect(annotations).toContain("textInfo array contains no string text values");
   });
 });
 

@@ -5,6 +5,11 @@ import {
   isSketchLayerVisible,
   resolveSketchStructure,
 } from "./sketch-structure.js";
+import {
+  normalizeSketchTextLayer,
+  sketchColorToCss,
+  type SketchTextNormalizationResult,
+} from "./sketch-text.js";
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -142,6 +147,11 @@ interface GroupEntry {
   h: string;
 }
 
+function isBoldWeight(weight: string | number | undefined): boolean {
+  if (typeof weight === "number") return weight >= 600;
+  return typeof weight === "string" && /bold|[6-9]00/i.test(weight);
+}
+
 export function extractFullAnnotationsFromSketch(
   sketchData: UnknownRecord,
   designScale = 2.0,
@@ -153,6 +163,14 @@ export function extractFullAnnotationsFromSketch(
   const shapeLayers: ShapeEntry[] = [];
   const imageLayers: ImageEntry[] = [];
   const groupStructure: GroupEntry[] = [];
+  const textWarnings = new Set<string>();
+
+  const normalizeText = (layer: UnknownRecord, type: string): SketchTextNormalizationResult | undefined => {
+    if (type !== "textLayer") return undefined;
+    const normalized = normalizeSketchTextLayer(layer);
+    for (const warning of normalized.warnings) textWarnings.add(warning);
+    return normalized;
+  };
 
   const walkLayer = (layer: UnknownRecord, depth = 0, parentPath = ""): void => {
     if (!layer || !isRecord(layer)) return;
@@ -166,6 +184,7 @@ export function extractFullAnnotationsFromSketch(
     const left = frame.x;
     const top = frame.y;
     const currentPath = parentPath ? `${parentPath}/${name}` : name;
+    const normalizedText = normalizeText(layer, ltype);
 
     if (w === 0 && h === 0) {
       const children = Array.isArray(layer.layers) ? layer.layers : [];
@@ -178,34 +197,26 @@ export function extractFullAnnotationsFromSketch(
     const opacity = extractOpacity(layer);
 
     if (ltype === "textLayer") {
-      const ti = isRecord(layer.textInfo) ? layer.textInfo : {};
-      const text = String(ti.text ?? "");
-      const color = isRecord(ti.color) ? ti.color : {};
-      const size = Number(ti.size ?? 0);
-      const font = String(ti.fontPostScriptName ?? "");
-      const bold = Boolean(ti.bold);
-      const italic = Boolean(ti.italic);
-      const justify = String(ti.justification ?? "left");
-      const leading = ti.leading;
-      const tracking = ti.tracking;
+      const normalized = normalizedText?.value;
+      const textStyle = normalized?.style ?? {};
       const le = isRecord(layer.layerEffects) ? layer.layerEffects : {};
 
       const entry: TextEntry = {
         name,
         path: currentPath,
-        text,
+        text: normalized?.text ?? "",
         x: pxStr(left, scale),
         y: pxStr(top, scale),
         w: pxStr(w, scale),
         h: pxStr(h, scale),
-        color: isRecord(ti.color) && Object.keys(color).length > 0 ? rgbaStr(color, opacity) : null,
-        fontSize: size ? pxStr(size, scale) : null,
-        font,
-        bold,
-        italic,
-        justify,
-        leading: leading != null ? pxStr(leading, scale) : null,
-        tracking,
+        color: sketchColorToCss(textStyle.color, opacity) ?? null,
+        fontSize: textStyle.fontSize ? pxStr(textStyle.fontSize, scale) : null,
+        font: normalized?.fontName ?? "",
+        bold: isBoldWeight(textStyle.fontWeight),
+        italic: textStyle.italic ?? false,
+        justify: textStyle.alignment ?? "left",
+        leading: textStyle.lineHeight != null ? pxStr(textStyle.lineHeight, scale) : null,
+        tracking: textStyle.letterSpacing != null ? pxStr(textStyle.letterSpacing, scale) : null,
         stroke: null,
         shadow: null,
       };
@@ -318,6 +329,7 @@ export function extractFullAnnotationsFromSketch(
     const left = frame.x;
     const top = frame.y;
     const currentPath = parentPath ? `${parentPath}/${name}` : name;
+    const normalizedText = normalizeText(layer, ltype);
 
     if (w === 0 && h === 0) {
       const children = Array.isArray(layer.layers) ? layer.layers : [];
@@ -330,39 +342,25 @@ export function extractFullAnnotationsFromSketch(
     const opacity = typeof layer.opacity === "number" ? layer.opacity : 100;
 
     if (ltype === "textLayer") {
-      const textObj = isRecord(layer.text) ? layer.text : {};
-      const text = String(textObj.value ?? "");
-      const ts = isRecord(textObj.style) ? textObj.style : {};
-      const fontObj = isRecord(ts.font) ? ts.font : {};
-      const colorObj = isRecord(ts.color) ? ts.color : {};
-      const size = Number(fontObj.size ?? 0);
-      const font = String(fontObj.name ?? fontObj.postScriptName ?? "");
-      const bold = Boolean(fontObj.bold || fontObj.type === "Bold");
-      const italic = Boolean(fontObj.italic);
-      const justify = String(fontObj.align ?? "left");
-      const lineHeightObj = fontObj.lineHeight;
-      const leading = isRecord(lineHeightObj) ? lineHeightObj.value : lineHeightObj;
-      const letterSpacingObj = fontObj.letterSpacing;
-      const tracking = isRecord(letterSpacingObj) ? letterSpacingObj.value : letterSpacingObj;
+      const normalized = normalizedText?.value;
+      const textStyle = normalized?.style ?? {};
 
       const entry: TextEntry = {
         name,
         path: currentPath,
-        text,
+        text: normalized?.text ?? "",
         x: pxStr(left, scale),
         y: pxStr(top, scale),
         w: pxStr(w, scale),
         h: pxStr(h, scale),
-        color: Object.keys(colorObj).length > 0
-          ? (colorObj.value != null ? String(colorObj.value) : rgbaStr(colorObj, opacity))
-          : null,
-        fontSize: size ? pxStr(size, scale) : null,
-        font,
-        bold,
-        italic,
-        justify,
-        leading: leading != null ? pxStr(leading, scale) : null,
-        tracking,
+        color: sketchColorToCss(textStyle.color, opacity) ?? null,
+        fontSize: textStyle.fontSize ? pxStr(textStyle.fontSize, scale) : null,
+        font: normalized?.fontName ?? "",
+        bold: isBoldWeight(textStyle.fontWeight),
+        italic: textStyle.italic ?? false,
+        justify: textStyle.alignment ?? "left",
+        leading: textStyle.lineHeight != null ? pxStr(textStyle.lineHeight, scale) : null,
+        tracking: textStyle.letterSpacing != null ? pxStr(textStyle.letterSpacing, scale) : null,
         stroke: null,
         shadow: null,
       };
@@ -471,6 +469,12 @@ export function extractFullAnnotationsFromSketch(
     for (const layer of structure.layers) walkArtboardLayer(layer);
   } else {
     for (const layer of structure.layers) walkLayer(layer);
+  }
+
+  if (textWarnings.size > 0) {
+    lines.push("");
+    lines.push("⚠️ 文本解析警告:");
+    for (const warning of textWarnings) lines.push(`  ${warning}`);
   }
 
   if (groupStructure.length > 0) {
