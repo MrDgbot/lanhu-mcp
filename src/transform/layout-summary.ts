@@ -1,4 +1,5 @@
 import type { UnknownRecord } from "../shared/types.js";
+import type { LayerAnnotation } from "./sketch-to-html.js";
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -114,4 +115,20 @@ export function extractLayoutSummary(schema: UnknownRecord): string {
 
   walk(schema);
   return lines.join("\n");
+}
+
+export function extractSketchLayoutSummary(layerAnnotations: LayerAnnotation[]): string {
+  return layerAnnotations.map((layer) => {
+    const geometry = ["left", "top", "width", "height"]
+      .flatMap((property) => {
+        const value = layer.css[property];
+        return value === undefined ? [] : [`${property}:${value}`];
+      })
+      .join(" ");
+    const text = layer.text?.trim();
+    const clippedText = text
+      ? ` "${text.length > 24 ? `${text.slice(0, 24)}...` : text}"`
+      : "";
+    return `[${layer.type}]${clippedText} ${layer.name}${geometry ? ` ${geometry}` : ""}`;
+  }).join("\n");
 }

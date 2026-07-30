@@ -78,13 +78,27 @@ function simplifyShadow(shadow: UnknownRecord): string | undefined {
   return `${asString(color.value) || "unknown"} ${asNumber(shadow.offsetX)}px ${asNumber(shadow.offsetY)}px ${asNumber(shadow.blurRadius)}px ${asNumber(shadow.spread)}px`;
 }
 
-export function extractLayerTree(sketch: UnknownRecord, maxDepth = 4): string {
+export type LayerDepth = number | "all";
+
+export interface LayerTreeResult {
+  tree: string;
+  truncated: boolean;
+  depth: LayerDepth;
+}
+
+export function extractLayerTreeResult(
+  sketch: UnknownRecord,
+  maxDepth: LayerDepth = 4,
+): LayerTreeResult {
   const artboard = isRecord(sketch.artboard) ? sketch.artboard : undefined;
-  if (!artboard) {
-    return "";
+  const board = isRecord(sketch.board) ? sketch.board : undefined;
+  const root = artboard ?? board;
+  if (!root) {
+    return { tree: "", truncated: false, depth: maxDepth };
   }
 
   const lines: string[] = [];
+  let truncated = false;
 
   const formatStyleBrief = (style: UnknownRecord): string => {
     const parts: string[] = [];
@@ -111,19 +125,19 @@ export function extractLayerTree(sketch: UnknownRecord, maxDepth = 4): string {
   };
 
   const walk = (layer: UnknownRecord, depth = 0): void => {
-    if (depth > maxDepth || layer.visible === false) {
+    if (layer.visible === false || layer.isVisible === false) {
       return;
     }
-    const frame = isRecord(layer.frame) ? layer.frame : {};
-    const w = asNumber(frame.width);
-    const h = asNumber(frame.height);
-    const x = asNumber(frame.x);
-    const y = asNumber(frame.y);
+    if (maxDepth !== "all" && depth > maxDepth) {
+      truncated = true;
+      return;
+    }
+    const dimensions = getDimensions(layer);
     const type = asString(layer.type) || "?";
     const name = asString(layer.name) || "?";
     const sublayers = Array.isArray(layer.layers) ? layer.layers.filter(isRecord) : [];
     const style = isRecord(layer.style) ? layer.style : {};
-    let line = `${"  ".repeat(depth)}${type}: ${name} (${Math.round(w)}x${Math.round(h)} @${Math.round(x)},${Math.round(y)})`;
+    let line = `${"  ".repeat(depth)}${type}: ${name} (${Math.round(dimensions.w)}x${Math.round(dimensions.h)} @${Math.round(dimensions.x)},${Math.round(dimensions.y)})`;
 
     if (type === "textLayer") {
       const text = isRecord(layer.text) ? layer.text : {};
@@ -148,16 +162,25 @@ export function extractLayerTree(sketch: UnknownRecord, maxDepth = 4): string {
     }
   };
 
-  const frame = isRecord(artboard.frame) ? artboard.frame : {};
-  lines.push(`Artboard: ${asString(artboard.name) || "?"} (${Math.round(asNumber(frame.width))}x${Math.round(asNumber(frame.height))})`);
-  lines.push(`Total layers: ${Array.isArray(artboard.layers) ? artboard.layers.length : 0}`);
+  const dimensions = getDimensions(root);
+  const rootType = artboard ? "Artboard" : "Board";
+  lines.push(`${rootType}: ${asString(root.name) || "?"} (${Math.round(dimensions.w)}x${Math.round(dimensions.h)})`);
+  lines.push(`Total layers: ${Array.isArray(root.layers) ? root.layers.length : 0}`);
   lines.push("");
 
-  const layers = Array.isArray(artboard.layers) ? artboard.layers.filter(isRecord) : [];
+  const layers = Array.isArray(root.layers) ? root.layers.filter(isRecord) : [];
   for (const layer of layers) {
     walk(layer);
   }
-  return lines.join("\n");
+  if (truncated) {
+    lines.push("");
+    lines.push(`[Layer tree truncated at depth ${maxDepth}; pass layer_depth: "all" for the complete tree.]`);
+  }
+  return { tree: lines.join("\n"), truncated, depth: maxDepth };
+}
+
+export function extractLayerTree(sketch: UnknownRecord, maxDepth: LayerDepth = 4): string {
+  return extractLayerTreeResult(sketch, maxDepth).tree;
 }
 
 export function extractDesignTokens(sketch: UnknownRecord): string {

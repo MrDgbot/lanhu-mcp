@@ -4,6 +4,7 @@ import { extractFullAnnotationsFromSketch } from "../src/transform/sketch-annota
 import {
   convertSketchToHtml,
   convertSketchToHtmlMinified,
+  extractSketchLayerAnnotations,
   inferDesignScale,
 } from "../src/transform/sketch-to-html.js";
 
@@ -163,6 +164,19 @@ describe("convertSketchToHtml", () => {
     const result = convertSketchToHtml(minimalSketch, 3.0);
     expect(result.html).toContain("width:250px");
     expect(result.html).toContain("height:444.7px");
+  });
+});
+
+describe("extractSketchLayerAnnotations", () => {
+  it("extracts structured annotations without returning HTML", () => {
+    const annotations = extractSketchLayerAnnotations(minimalSketch, 2.0);
+
+    expect(annotations).toHaveLength(4);
+    expect(annotations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "title", type: "textLayer", text: "Hello World" }),
+      ]),
+    );
   });
 });
 

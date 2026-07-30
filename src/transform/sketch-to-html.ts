@@ -236,10 +236,11 @@ function flattenArtboardLayers(rawLayers: unknown[], scale: number): FlatLayer[]
   return result;
 }
 
-export function convertSketchToHtml(
+function analyzeSketch(
   sketchData: UnknownRecord,
   designScale = 2.0,
   designImgUrl = "",
+  renderHtml = true,
 ): SketchToHtmlResult {
   const scale = designScale || 2.0;
 
@@ -399,24 +400,26 @@ export function convertSketchToHtml(
       }
     }
 
-    cssRules.push(`.${cls}{${props.join(";")}}`);
+    if (renderHtml) {
+      cssRules.push(`.${cls}{${props.join(";")}}`);
 
-    const safeName = safeAttr(name);
-    const cssData = Object.entries(annot.css)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join("; ");
-    const safeCss = safeAttr(cssData);
+      const safeName = safeAttr(name);
+      const cssData = Object.entries(annot.css)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("; ");
+      const safeCss = safeAttr(cssData);
 
-    if (textContent) {
-      htmlParts.push(
-        `<div class="${cls}" title="${safeName}" data-css="${safeCss}">${safeContent(textContent)}</div>`,
-      );
-    } else if (isSlice) {
-      htmlParts.push(
-        `<img class="${cls}" title="${safeName}" data-css="${safeCss}" src="${sliceUrl}" referrerpolicy="no-referrer" />`,
-      );
-    } else {
-      htmlParts.push(`<div class="${cls}" title="${safeName}" data-css="${safeCss}"></div>`);
+      if (textContent) {
+        htmlParts.push(
+          `<div class="${cls}" title="${safeName}" data-css="${safeCss}">${safeContent(textContent)}</div>`,
+        );
+      } else if (isSlice) {
+        htmlParts.push(
+          `<img class="${cls}" title="${safeName}" data-css="${safeCss}" src="${sliceUrl}" referrerpolicy="no-referrer" />`,
+        );
+      } else {
+        htmlParts.push(`<div class="${cls}" title="${safeName}" data-css="${safeCss}"></div>`);
+      }
     }
 
     layerAnnotations.push(annot);
@@ -426,19 +429,35 @@ export function convertSketchToHtml(
     ? `;background:url(${designImgUrl}) no-repeat;background-size:${boardW}px ${boardH}px`
     : "";
 
-  const html =
-    `<!DOCTYPE html><html><head><meta charset="UTF-8">` +
-    `<meta name="referrer" content="no-referrer">` +
-    `<meta name="viewport" content="width=device-width,initial-scale=1.0">` +
-    `<title>Design</title><style>` +
-    `*{margin:0;padding:0;box-sizing:border-box}img{display:block}` +
-    `.design{position:relative;width:${boardW}px;height:${boardH}px;overflow:hidden;margin:0 auto${bgStyle}}\n` +
-    cssRules.join("\n") +
-    `</style></head><body><div class="design">\n` +
-    htmlParts.join("\n") +
-    `\n</div></body></html>`;
+  const html = renderHtml
+    ? `<!DOCTYPE html><html><head><meta charset="UTF-8">` +
+      `<meta name="referrer" content="no-referrer">` +
+      `<meta name="viewport" content="width=device-width,initial-scale=1.0">` +
+      `<title>Design</title><style>` +
+      `*{margin:0;padding:0;box-sizing:border-box}img{display:block}` +
+      `.design{position:relative;width:${boardW}px;height:${boardH}px;overflow:hidden;margin:0 auto${bgStyle}}\n` +
+      cssRules.join("\n") +
+      `</style></head><body><div class="design">\n` +
+      htmlParts.join("\n") +
+      `\n</div></body></html>`
+    : "";
 
   return { html, imageUrlMapping, layerAnnotations };
+}
+
+export function extractSketchLayerAnnotations(
+  sketchData: UnknownRecord,
+  designScale = 2.0,
+): LayerAnnotation[] {
+  return analyzeSketch(sketchData, designScale, "", false).layerAnnotations;
+}
+
+export function convertSketchToHtml(
+  sketchData: UnknownRecord,
+  designScale = 2.0,
+  designImgUrl = "",
+): SketchToHtmlResult {
+  return analyzeSketch(sketchData, designScale, designImgUrl);
 }
 
 export function convertSketchToHtmlMinified(

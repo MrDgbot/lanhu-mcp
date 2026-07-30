@@ -107,7 +107,7 @@ claude mcp add lanhu -- npx -y mcp-lanhu
 | `tokens` | 仅提取 Design Tokens（字体、颜色、阴影等） |
 | `slices` | 提取切图资源 |
 
-`analyze` 模式支持 `include` 参数按需选择输出：`html`、`image`、`tokens`、`layout`、`layers`、`slices`。默认 `["html", "tokens"]`。
+`analyze` 模式支持 `include` 参数按需选择输出：`html`、`image`、`tokens`、`layout`、`layers`、`slices`。默认 `["html", "tokens", "layers", "image"]`。请求 `layers` 时可用 `layer_depth` 控制嵌套深度：默认 `4`，`0` 仅返回顶层，`"all"` 返回完整图层树。每个设计会按请求项返回 `success`、`partial_success` 或 `error`，结构化图层标注位于 `layer_annotations`。
 
 **Design Tokens 输出示例：**
 
@@ -195,7 +195,7 @@ A: [Model Context Protocol](https://modelcontextprotocol.io/)，让 AI 助手安
 A: 任何可网页访问的蓝湖账号，通过浏览器 Cookie 认证。
 
 **Q: `analyze` 返回太大怎么办？**
-A: 用 `include` 参数，如 `["tokens"]` 只返回 Design Tokens。默认不含 base64 图片。
+A: 用 `include` 参数，如 `["tokens"]` 只返回 Design Tokens；不需要 base64 图片时请不要包含 `image`。
 
 **Q: 不用 Cursor 也能用？**
 A: 能。支持所有 MCP 客户端。

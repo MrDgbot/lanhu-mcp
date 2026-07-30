@@ -7,12 +7,26 @@ import { getDesignSchemaJson, getSketchJson, getSlices, listDesigns } from "../l
 import { mapConcurrent, withRetry } from "../shared/concurrency.js";
 import { createToolResult } from "../shared/errors.js";
 import { minifyHtml } from "../shared/html.js";
-import type { JsonObject, LanhuDesignSummary, ToolContent } from "../shared/types.js";
-import { extractDesignTokens, extractLayerTree } from "../transform/design-tokens.js";
-import { extractLayoutSummary } from "../transform/layout-summary.js";
+import type {
+  JsonObject,
+  LanhuDesignSummary,
+  LanhuSlicesResult,
+  ToolContent,
+  UnknownRecord,
+} from "../shared/types.js";
+import {
+  extractDesignTokens,
+  extractLayerTreeResult,
+  type LayerDepth,
+} from "../transform/design-tokens.js";
+import { extractLayoutSummary, extractSketchLayoutSummary } from "../transform/layout-summary.js";
 import { convertSchemaToHtml, localizeImageUrls } from "../transform/schema-to-html.js";
 import { extractFullAnnotationsFromSketch } from "../transform/sketch-annotations.js";
-import { convertSketchToHtml, inferDesignScale } from "../transform/sketch-to-html.js";
+import {
+  convertSketchToHtml,
+  extractSketchLayerAnnotations,
+  inferDesignScale,
+} from "../transform/sketch-to-html.js";
 import type { LayerAnnotation } from "../transform/sketch-to-html.js";
 
 function inferMimeType(url: string): string {
@@ -63,23 +77,53 @@ export function pickTargetDesigns(
   return selected;
 }
 
-interface DesignHtmlResult {
-  success: boolean;
+type IncludeOption = "html" | "image" | "tokens" | "layout" | "layers" | "slices";
+
+type AnalysisStatus = "success" | "partial_success" | "error";
+
+interface DesignAnalysisResult {
   designName: string;
+  succeededOutputs: Set<IncludeOption>;
+  errors: Partial<Record<IncludeOption, string>>;
   htmlCode?: string;
+  htmlSource?: "schema" | "sketch";
   imageUrlMapping?: Record<string, string>;
+  imageBytes?: number;
   layoutSummary?: string;
+  layoutSource?: "schema" | "sketch";
   layerTree?: string;
+  layerTreeTruncated?: boolean;
+  layerDepth?: LayerDepth;
   designTokens?: string;
-  error?: string;
-  sketchHtml?: string;
   sketchAnnotations?: string;
   layerCssAnnotations?: LayerAnnotation[];
+  slices?: LanhuSlicesResult;
 }
 
 const DEFAULT_INCLUDE = ["html", "tokens", "layers", "image"] as const;
 
-type IncludeOption = "html" | "image" | "tokens" | "layout" | "layers" | "slices";
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  const message = String(error).trim();
+  return message && message !== "[object Object]"
+    ? message
+    : "Operation failed without an error message.";
+}
+
+function combineFallbackErrors(primary: string | undefined, fallback: string): string {
+  return primary ? `DDS Schema: ${primary}; Sketch fallback: ${fallback}` : fallback;
+}
+
+function getAnalysisStatus(
+  result: Pick<DesignAnalysisResult, "succeededOutputs">,
+  requestedOutputs: ReadonlySet<IncludeOption>,
+): AnalysisStatus {
+  const succeeded = [...requestedOutputs].filter((output) => result.succeededOutputs.has(output)).length;
+  if (succeeded === requestedOutputs.size) return "success";
+  return succeeded > 0 ? "partial_success" : "error";
+}
 
 export function registerDesignTool(server: McpServer): void {
   server.registerTool(
@@ -89,7 +133,7 @@ export function registerDesignTool(server: McpServer): void {
         "Unified Lanhu design tool. Supports listing, analyzing, extracting tokens, and getting slices.\n\n" +
         "Modes:\n" +
         "  - list: List all designs in the project\n" +
-        "  - analyze: Full design analysis with HTML+CSS, tokens, layout (default)\n" +
+        "  - analyze: Full design analysis with HTML+CSS, tokens, layers, and image (default)\n" +
         "  - slices: Extract slice/asset info for download\n" +
         "  - tokens: Extract design tokens only (fonts, colors, shadows, etc.)\n\n" +
         "For detailDetach URLs (contains image_id), pass design_names='all'.",
@@ -108,9 +152,13 @@ export function registerDesignTool(server: McpServer): void {
           "Content to include in analyze mode. Default: ['html', 'tokens', 'layers', 'image']. " +
           "Options: html, image (base64), tokens, layout, layers, slices.",
         ),
+        layer_depth: z.union([z.number().int().min(0), z.literal("all")]).optional().describe(
+          "Maximum nested layer depth for analyze mode. 0 returns top-level layers only; " +
+          "use 'all' for the complete tree. Default: 4.",
+        ),
       },
     },
-    async ({ url, mode, design_names, include }) => {
+    async ({ url, mode, design_names, include, layer_depth }) => {
       try {
         const client = new LanhuClient({
           cookie: config.lanhuCookie,
@@ -215,238 +263,413 @@ export function registerDesignTool(server: McpServer): void {
         const includeSet = new Set<IncludeOption>(
           (include as IncludeOption[] | undefined) ?? [...DEFAULT_INCLUDE],
         );
+        const requestedLayerDepth = (layer_depth ?? 4) as LayerDepth;
         const cdnFetch = createLanhuFetch({
           cookie: config.lanhuCookie,
           ddsCookie: config.ddsCookie,
         });
 
         const content: ToolContent[] = [];
-        const htmlResults: DesignHtmlResult[] = [];
+        const analysisResults: DesignAnalysisResult[] = [];
 
         const processDesign = async (design: LanhuDesignSummary): Promise<{
-          imageResult?: { success: boolean; designName: string; bytes?: number };
-          htmlResult: DesignHtmlResult;
+          analysisResult: DesignAnalysisResult;
           imageContent?: ToolContent;
         }> => {
-          let imageResult: { success: boolean; designName: string; bytes?: number } | undefined;
+          const analysisResult: DesignAnalysisResult = {
+            designName: design.name,
+            succeededOutputs: new Set<IncludeOption>(),
+            errors: {},
+          };
           let imageContent: ToolContent | undefined;
+          const markSuccess = (output: IncludeOption): void => {
+            analysisResult.succeededOutputs.add(output);
+            delete analysisResult.errors[output];
+          };
+          const markError = (output: IncludeOption, message: string): void => {
+            if (!analysisResult.succeededOutputs.has(output)) {
+              analysisResult.errors[output] = message;
+            }
+          };
 
           // Download cover image (only if requested)
-          if (includeSet.has("image") && design.url) {
-            try {
-              const response = await withRetry(() => cdnFetch(design.url!.split("?")[0]));
-              if (response.ok) {
+          if (includeSet.has("image")) {
+            if (!design.url) {
+              markError("image", "Design image URL is unavailable.");
+            } else {
+              const designUrl = design.url;
+              try {
+                const response = await withRetry(() => cdnFetch(designUrl.split("?")[0]));
+                if (!response.ok) {
+                  throw new Error(`Image download failed with HTTP ${response.status}.`);
+                }
                 const bytes = Buffer.from(await response.arrayBuffer());
                 imageContent = {
                   type: "image",
                   data: bytes.toString("base64"),
-                  mimeType: inferMimeType(design.url),
+                  mimeType: inferMimeType(designUrl),
                 };
-                imageResult = { success: true, designName: design.name, bytes: bytes.length };
-              } else {
-                imageResult = { success: false, designName: design.name };
+                analysisResult.imageBytes = bytes.length;
+                markSuccess("image");
+              } catch (error) {
+                markError("image", errorMessage(error));
               }
-            } catch {
-              imageResult = { success: false, designName: design.name };
             }
           }
 
-          // Schema -> HTML
-          const htmlEntry: DesignHtmlResult = { success: false, designName: design.name };
+          const needsSchema = includeSet.has("html") || includeSet.has("layout");
+          let schema: UnknownRecord | undefined;
+          let schemaError: string | undefined;
+          if (needsSchema) {
+            if (design.source === "detailDetach") {
+              schemaError = "DDS Schema is unavailable for detailDetach designs.";
+            } else if (!teamId) {
+              schemaError = "team_id is required for DDS Schema extraction.";
+            } else {
+              try {
+                const schemaResult = await getDesignSchemaJson(
+                  client, design.id, teamId, designsResult.params.projectId,
+                );
+                schema = schemaResult.schema;
+              } catch (error) {
+                schemaError = errorMessage(error);
+              }
+            }
+          }
 
           if (includeSet.has("html")) {
-            try {
-              if (design.source === "detailDetach") {
-                throw new Error("Using Sketch JSON flow for detailDetach.");
+            if (schema) {
+              try {
+                const rawHtml = convertSchemaToHtml(schema);
+                const localized = localizeImageUrls(rawHtml);
+                analysisResult.htmlCode = localized.htmlCode;
+                analysisResult.htmlSource = "schema";
+                analysisResult.imageUrlMapping = localized.imageUrlMapping;
+                markSuccess("html");
+              } catch (error) {
+                markError("html", errorMessage(error));
               }
-              if (!teamId) {
-                throw new Error("team_id is required for HTML extraction; image preview is still available.");
-              }
-              const schemaResult = await getDesignSchemaJson(
-                client, design.id, teamId, designsResult.params.projectId,
-              );
-              const rawHtml = convertSchemaToHtml(schemaResult.schema);
-              const localized = localizeImageUrls(rawHtml);
-              htmlEntry.success = true;
-              htmlEntry.htmlCode = localized.htmlCode;
-              htmlEntry.imageUrlMapping = localized.imageUrlMapping;
-              if (includeSet.has("layout")) {
-                htmlEntry.layoutSummary = extractLayoutSummary(schemaResult.schema);
-              }
-            } catch (error) {
-              htmlEntry.error = error instanceof Error ? error.message : String(error);
+            } else {
+              markError("html", schemaError ?? "DDS Schema extraction produced no data.");
             }
           }
 
-          const needsSketch = includeSet.has("tokens") || includeSet.has("layers") || includeSet.has("html");
+          if (includeSet.has("layout")) {
+            if (schema) {
+              try {
+                analysisResult.layoutSummary = extractLayoutSummary(schema);
+                analysisResult.layoutSource = "schema";
+                markSuccess("layout");
+              } catch (error) {
+                markError("layout", errorMessage(error));
+              }
+            } else {
+              markError("layout", schemaError ?? "DDS Schema extraction produced no data.");
+            }
+          }
+
+          const needsSketch = includeSet.has("tokens") ||
+            includeSet.has("layers") ||
+            (includeSet.has("html") && !analysisResult.succeededOutputs.has("html")) ||
+            (includeSet.has("layout") && !analysisResult.succeededOutputs.has("layout"));
+
+          let sketch: UnknownRecord | undefined;
+          let sketchError: string | undefined;
           if (needsSketch) {
-            // Sketch JSON -> tokens / layers / fallback
+            if (!teamId && design.source !== "detailDetach") {
+              sketchError = "team_id is required for Sketch extraction.";
+            } else {
+              try {
+                const sketchResult = await withRetry(
+                  () => getSketchJson(client, design.id, teamId, designsResult.params.projectId),
+                );
+                sketch = sketchResult.sketch;
+              } catch (error) {
+                sketchError = errorMessage(error);
+              }
+            }
+          }
+          if (needsSketch && !sketch && !sketchError) {
+            sketchError = "Sketch extraction produced no data.";
+          }
+
+          if (sketch) {
+            const designScale = inferDesignScale(String(sketch.device ?? ""));
+            const designImgUrl = design.url?.split("?")[0] ?? "";
+            let sketchConversion: ReturnType<typeof convertSketchToHtml> | undefined;
+            let layerAnnotations: LayerAnnotation[] | undefined;
+            const getSketchConversion = (): ReturnType<typeof convertSketchToHtml> => {
+              sketchConversion ??= convertSketchToHtml(sketch, designScale, designImgUrl);
+              layerAnnotations ??= sketchConversion.layerAnnotations;
+              return sketchConversion;
+            };
+            const getLayerAnnotations = (): LayerAnnotation[] => {
+              layerAnnotations ??= extractSketchLayerAnnotations(sketch, designScale);
+              return layerAnnotations;
+            };
+
+            if (includeSet.has("tokens")) {
+              try {
+                analysisResult.designTokens = extractDesignTokens(sketch);
+                markSuccess("tokens");
+              } catch (error) {
+                markError("tokens", errorMessage(error));
+              }
+            }
+
+            if (includeSet.has("html") && !analysisResult.succeededOutputs.has("html")) {
+              try {
+                const conversion = getSketchConversion();
+                analysisResult.htmlCode = minifyHtml(conversion.html);
+                analysisResult.htmlSource = "sketch";
+                analysisResult.imageUrlMapping = conversion.imageUrlMapping;
+                if (designImgUrl) {
+                  analysisResult.imageUrlMapping["./assets/designs/design.png"] = designImgUrl;
+                }
+                markSuccess("html");
+              } catch (error) {
+                markError(
+                  "html",
+                  combineFallbackErrors(analysisResult.errors.html, errorMessage(error)),
+                );
+              }
+            }
+
+            if (includeSet.has("layers")) {
+              try {
+                const layerTree = extractLayerTreeResult(sketch, requestedLayerDepth);
+                analysisResult.layerTree = layerTree.tree;
+                analysisResult.layerTreeTruncated = layerTree.truncated;
+                analysisResult.layerDepth = layerTree.depth;
+                analysisResult.layerCssAnnotations = getLayerAnnotations();
+                analysisResult.sketchAnnotations = extractFullAnnotationsFromSketch(sketch, designScale);
+                markSuccess("layers");
+              } catch (error) {
+                markError("layers", errorMessage(error));
+              }
+            }
+
+            if (includeSet.has("layout") && !analysisResult.succeededOutputs.has("layout")) {
+              try {
+                analysisResult.layoutSummary = extractSketchLayoutSummary(getLayerAnnotations());
+                analysisResult.layoutSource = "sketch";
+                markSuccess("layout");
+              } catch (error) {
+                markError(
+                  "layout",
+                  combineFallbackErrors(analysisResult.errors.layout, errorMessage(error)),
+                );
+              }
+            }
+          } else if (sketchError) {
+            if (includeSet.has("tokens")) {
+              markError("tokens", sketchError);
+            }
+            if (includeSet.has("layers")) {
+              markError("layers", sketchError);
+            }
+            if (includeSet.has("layout") && !analysisResult.succeededOutputs.has("layout")) {
+              markError("layout", combineFallbackErrors(analysisResult.errors.layout, sketchError));
+            }
+            if (includeSet.has("html") && !analysisResult.succeededOutputs.has("html")) {
+              markError("html", combineFallbackErrors(analysisResult.errors.html, sketchError));
+            }
+          }
+
+          if (includeSet.has("slices")) {
             try {
               if (!teamId && design.source !== "detailDetach") {
-                throw new Error("team_id is required for Sketch extraction; image preview is still available.");
+                throw new Error("team_id is required for slice extraction.");
               }
-              const sketchResult = await withRetry(
-                () => getSketchJson(client, design.id, teamId, designsResult.params.projectId),
-              );
-              const sketch = sketchResult.sketch;
-
-              if (includeSet.has("tokens")) {
-                htmlEntry.designTokens = extractDesignTokens(sketch);
-              }
-              if (includeSet.has("layers")) {
-                htmlEntry.layerTree = extractLayerTree(sketch);
-              }
-
-              // Sketch fallback when schema failed
-              if (!htmlEntry.success && includeSet.has("html")) {
-                const deviceStr = String(sketch.device ?? "");
-                const designScale = inferDesignScale(deviceStr);
-                const designImgUrl = design.url?.split("?")[0] ?? "";
-                const sketchConversion = convertSketchToHtml(sketch, designScale, designImgUrl);
-                sketchConversion.imageUrlMapping["./assets/designs/design.png"] = designImgUrl;
-
-                htmlEntry.sketchHtml = minifyHtml(sketchConversion.html);
-                htmlEntry.imageUrlMapping = sketchConversion.imageUrlMapping;
-                htmlEntry.layerCssAnnotations = sketchConversion.layerAnnotations;
-                htmlEntry.sketchAnnotations = extractFullAnnotationsFromSketch(sketch, designScale);
-              }
-            } catch (sketchError) {
-              // Sketch extraction is best-effort
-              if (!htmlEntry.error) {
-                htmlEntry.error = sketchError instanceof Error ? sketchError.message : String(sketchError);
-              }
+              analysisResult.slices = await withRetry(() => getSlices(
+                client, design.id, teamId, designsResult.params.projectId,
+                true,
+              ));
+              markSuccess("slices");
+            } catch (error) {
+              markError("slices", errorMessage(error));
             }
           }
 
-          return { imageResult, htmlResult: htmlEntry, imageContent };
+          return { analysisResult, imageContent };
         };
 
         // Process designs concurrently
         const results = await mapConcurrent(targetDesigns, processDesign, 5);
 
-        for (const r of results) {
+        for (let index = 0; index < results.length; index++) {
+          const r = results[index];
           if (r.status === "fulfilled") {
             if (r.value.imageContent) content.push(r.value.imageContent);
-            htmlResults.push(r.value.htmlResult);
+            analysisResults.push(r.value.analysisResult);
           } else {
-            htmlResults.push({
-              success: false,
-              designName: "unknown",
-              error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+            const message = errorMessage(r.reason);
+            analysisResults.push({
+              designName: targetDesigns[index]?.name ?? "Unnamed design",
+              succeededOutputs: new Set<IncludeOption>(),
+              errors: Object.fromEntries(
+                [...includeSet].map((output) => [output, `Design processing failed: ${message}`]),
+              ),
             });
           }
         }
 
         // Build summary text
-        const htmlSuccessCount = htmlResults.filter((r) => r.success || r.sketchHtml).length;
-        const sketchFallbackCount = htmlResults.filter((r) => !r.success && r.sketchHtml).length;
+        const totalRequestedOutputs = analysisResults.length * includeSet.size;
+        const totalSucceededOutputs = analysisResults.reduce(
+          (sum, result) => sum + result.succeededOutputs.size,
+          0,
+        );
+        const overallStatus: AnalysisStatus = totalSucceededOutputs === totalRequestedOutputs
+          ? "success"
+          : totalSucceededOutputs > 0
+            ? "partial_success"
+            : "error";
+        const htmlSuccessCount = analysisResults.filter((result) =>
+          result.succeededOutputs.has("html")
+        ).length;
+        const sketchFallbackCount = analysisResults.filter((result) =>
+          result.htmlSource === "sketch"
+        ).length;
         const summarySections: string[] = [];
 
         summarySections.push("Design Analysis Results");
         summarySections.push(`Project: ${designsResult.projectName ?? "Unknown"}`);
+        summarySections.push(`Status: ${overallStatus}`);
         if (includeSet.has("html")) {
-          summarySections.push(`${htmlSuccessCount}/${htmlResults.length} HTML codes generated`);
+          summarySections.push(`${htmlSuccessCount}/${analysisResults.length} HTML codes generated`);
           if (sketchFallbackCount > 0) {
             summarySections.push(`${sketchFallbackCount} design(s) using Sketch fallback`);
           }
         }
         summarySections.push("");
 
-        for (let idx = 0; idx < htmlResults.length; idx++) {
-          const hr = htmlResults[idx];
-          summarySections.push(`\n--- ${hr.designName} ---`);
+        for (const result of analysisResults) {
+          const designStatus = getAnalysisStatus(result, includeSet);
+          summarySections.push(`\n--- ${result.designName} ---`);
+          summarySections.push(`Status: ${designStatus}`);
 
-          if (hr.success && hr.htmlCode) {
-            summarySections.push("```html");
-            summarySections.push(hr.htmlCode);
-            summarySections.push("```");
-
-            if (hr.layoutSummary) {
-              summarySections.push("\n--- Layout Summary ---");
-              summarySections.push(hr.layoutSummary);
-            }
-
-            const mapping = hr.imageUrlMapping ?? {};
-            if (Object.keys(mapping).length > 0) {
-              summarySections.push(`\nImage assets (${Object.keys(mapping).length}):`);
-              for (const [localPath, remoteUrl] of Object.entries(mapping)) {
-                summarySections.push(`  ${localPath} <- ${remoteUrl}`);
+          if (includeSet.has("html")) {
+            if (result.succeededOutputs.has("html")) {
+              if (result.htmlSource === "sketch") {
+                summarySections.push("Using Sketch fallback for HTML.");
               }
-            }
-          } else if (hr.sketchHtml || hr.sketchAnnotations) {
-            const isSketchJsonFlow = hr.error?.includes("Sketch JSON flow");
-            summarySections.push(
-              isSketchJsonFlow
-                ? "Using Sketch JSON flow for detailDetach."
-                : `DDS Schema unavailable (${hr.error ?? "unknown"}), using Sketch fallback.`,
-            );
-
-            if (hr.sketchHtml) {
               summarySections.push("```html");
-              summarySections.push(hr.sketchHtml);
+              summarySections.push(result.htmlCode ?? "");
               summarySections.push("```");
-            }
-
-            const fbMapping = hr.imageUrlMapping ?? {};
-            if (Object.keys(fbMapping).length > 0) {
-              summarySections.push(`\nImage assets (${Object.keys(fbMapping).length}):`);
-              for (const [localPath, remoteUrl] of Object.entries(fbMapping)) {
-                summarySections.push(`  ${localPath} <- ${remoteUrl}`);
+              const mapping = result.imageUrlMapping ?? {};
+              if (Object.keys(mapping).length > 0) {
+                summarySections.push(`\nImage assets (${Object.keys(mapping).length}):`);
+                for (const [localPath, remoteUrl] of Object.entries(mapping)) {
+                  summarySections.push(`  ${localPath} <- ${remoteUrl}`);
+                }
               }
+            } else {
+              summarySections.push(`HTML failed: ${result.errors.html}`);
             }
-
-            if (hr.layerCssAnnotations && hr.layerCssAnnotations.length > 0) {
-              summarySections.push(`\nCSS annotations (${hr.layerCssAnnotations.length} layers):`);
-              for (const la of hr.layerCssAnnotations) {
-                const cssStr = Object.entries(la.css).map(([k, v]) => `${k}: ${v}`).join("; ");
-                let line = `  [${la.type}] ${la.name}: ${cssStr}`;
-                if (la.text) line += ` | text="${la.text.slice(0, 50)}"`;
-                if (la.slice_url) line += ` | slice=${la.slice_url}`;
-                summarySections.push(line);
-              }
-            }
-
-            if (hr.sketchAnnotations) {
-              summarySections.push("\n--- Sketch Annotations ---");
-              summarySections.push(hr.sketchAnnotations);
-            }
-          } else {
-            summarySections.push(`Failed: ${hr.error ?? "Unknown"}`);
           }
 
-          if (hr.layerTree) {
-            summarySections.push("\n--- Layer Structure ---");
-            summarySections.push(hr.layerTree);
+          if (includeSet.has("layout")) {
+            if (result.succeededOutputs.has("layout")) {
+              summarySections.push(`\n--- Layout Summary (${result.layoutSource}) ---`);
+              summarySections.push(result.layoutSummary || "(no layout entries found)");
+            } else {
+              summarySections.push(`Layout failed: ${result.errors.layout}`);
+            }
           }
 
-          if (hr.designTokens) {
-            summarySections.push("\n--- Design Tokens ---");
-            summarySections.push(hr.designTokens);
+          if (includeSet.has("layers")) {
+            if (result.succeededOutputs.has("layers")) {
+              summarySections.push("\n--- Layer Structure ---");
+              summarySections.push(result.layerTree || "(no layers found)");
+              if (result.layerCssAnnotations && result.layerCssAnnotations.length > 0) {
+                summarySections.push(`\nCSS annotations (${result.layerCssAnnotations.length} layers):`);
+                for (const annotation of result.layerCssAnnotations) {
+                  const css = Object.entries(annotation.css)
+                    .map(([property, value]) => `${property}: ${value}`)
+                    .join("; ");
+                  let line = `  [${annotation.type}] ${annotation.name}: ${css}`;
+                  if (annotation.text) line += ` | text="${annotation.text.slice(0, 50)}"`;
+                  if (annotation.slice_url) line += ` | slice=${annotation.slice_url}`;
+                  summarySections.push(line);
+                }
+              }
+              if (result.sketchAnnotations) {
+                summarySections.push("\n--- Sketch Annotations ---");
+                summarySections.push(result.sketchAnnotations);
+              }
+            } else {
+              summarySections.push(`Layers failed: ${result.errors.layers}`);
+            }
+          }
+
+          if (includeSet.has("tokens")) {
+            if (result.succeededOutputs.has("tokens")) {
+              summarySections.push("\n--- Design Tokens ---");
+              summarySections.push(result.designTokens || "(no tokens found)");
+            } else {
+              summarySections.push(`Tokens failed: ${result.errors.tokens}`);
+            }
+          }
+
+          if (includeSet.has("image")) {
+            if (result.succeededOutputs.has("image")) {
+              summarySections.push(`Image downloaded: ${result.imageBytes ?? 0} bytes`);
+            } else {
+              summarySections.push(`Image failed: ${result.errors.image}`);
+            }
+          }
+
+          if (includeSet.has("slices")) {
+            if (result.succeededOutputs.has("slices")) {
+              summarySections.push(`Slices extracted: ${result.slices?.totalSlices ?? 0}`);
+            } else {
+              summarySections.push(`Slices failed: ${result.errors.slices}`);
+            }
           }
         }
 
         content.unshift({ type: "text", text: summarySections.join("\n").trim() });
 
-        const structuredDesigns = htmlResults.map((hr) => ({
-          name: hr.designName,
-          success: hr.success || Boolean(hr.sketchHtml),
-          html_code: hr.htmlCode ?? hr.sketchHtml ?? null,
-          image_url_mapping: hr.imageUrlMapping ?? null,
-          layout_summary: hr.layoutSummary ?? null,
-          layer_tree: hr.layerTree ?? null,
-          design_tokens: hr.designTokens ?? null,
-          sketch_annotations: hr.sketchAnnotations ?? null,
-          fallback_mode: hr.sketchHtml ? "sketch" : undefined,
-        }));
+        const structuredDesigns = analysisResults.map((result) => {
+          const status = getAnalysisStatus(result, includeSet);
+          return {
+            name: result.designName,
+            status,
+            success: status === "success",
+            outputs: Object.fromEntries([...includeSet].map((output) => [
+              output,
+              result.succeededOutputs.has(output)
+                ? { status: "success" }
+                : { status: "error", error: result.errors[output] },
+            ])),
+            errors: result.errors,
+            html_code: result.htmlCode ?? null,
+            html_source: result.htmlSource ?? null,
+            image_url_mapping: result.imageUrlMapping ?? null,
+            image_bytes: result.imageBytes ?? null,
+            layout_summary: result.layoutSummary ?? null,
+            layout_source: result.layoutSource ?? null,
+            layer_tree: result.layerTree ?? null,
+            layer_tree_truncated: result.layerTreeTruncated ?? null,
+            layer_depth: result.layerDepth ?? null,
+            layer_annotations: result.layerCssAnnotations ?? null,
+            design_tokens: result.designTokens ?? null,
+            sketch_annotations: result.sketchAnnotations ?? null,
+            slices: result.slices ?? null,
+            fallback_mode: result.htmlSource === "sketch" ? "sketch" : null,
+          };
+        });
 
         return {
           content,
           structuredContent: {
-            status: "success",
+            status: overallStatus,
             project_name: designsResult.projectName ?? null,
             total_designs: targetDesigns.length,
             designs: structuredDesigns,
           } as unknown as JsonObject,
+          ...(overallStatus === "error" ? { isError: true } : {}),
         };
       } catch (error) {
         return createToolResult(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractDesignTokens, extractLayerTree } from "../src/transform/design-tokens.js";
+import {
+  extractDesignTokens,
+  extractLayerTree,
+  extractLayerTreeResult,
+} from "../src/transform/design-tokens.js";
 
 const artboardSketch = {
   artboard: {
@@ -122,12 +126,63 @@ describe("extractDesignTokens (refactored)", () => {
   });
 });
 
-describe("extractLayerTree (unchanged)", () => {
+describe("extractLayerTree", () => {
   it("still works with artboard format", () => {
     const tree = extractLayerTree(artboardSketch);
     expect(tree).toContain("Artboard: 首页");
     expect(tree).toContain("textLayer: 标题");
     expect(tree).toContain("textLayer: 副标题");
     expect(tree).toContain("shapeLayer: 卡片背景");
+  });
+
+  it("reports truncation at the default depth and supports the complete tree", () => {
+    const nestedLayer = (depth: number): Record<string, unknown> => ({
+      type: depth === 0 ? "shapeLayer" : "groupLayer",
+      name: `level-${depth}`,
+      visible: true,
+      frame: { x: depth, y: depth, width: 100, height: 100 },
+      layers: depth === 0 ? [] : [nestedLayer(depth - 1)],
+    });
+    const deepSketch = {
+      artboard: {
+        name: "Deep",
+        frame: { width: 375, height: 812 },
+        layers: [nestedLayer(6)],
+      },
+    };
+
+    const limited = extractLayerTreeResult(deepSketch);
+    expect(limited.truncated).toBe(true);
+    expect(limited.tree).not.toContain("level-0");
+    expect(limited.tree).toContain("Layer tree truncated at depth 4");
+
+    const complete = extractLayerTreeResult(deepSketch, "all");
+    expect(complete.truncated).toBe(false);
+    expect(complete.tree).toContain("level-0");
+    expect(complete.tree).not.toContain("Layer tree truncated");
+  });
+
+  it("supports board-format Sketch data", () => {
+    const result = extractLayerTreeResult({
+      board: {
+        name: "Detached",
+        width: 750,
+        height: 1334,
+        layers: [
+          {
+            type: "shapeLayer",
+            name: "Background",
+            visible: true,
+            left: 0,
+            top: 0,
+            width: 750,
+            height: 1334,
+          },
+        ],
+      },
+    });
+
+    expect(result.tree).toContain("Board: Detached (750x1334)");
+    expect(result.tree).toContain("shapeLayer: Background");
   });
 });

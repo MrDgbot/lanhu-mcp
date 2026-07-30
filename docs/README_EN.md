@@ -171,7 +171,7 @@ Unified design tool with `mode` parameter:
 | `tokens` | Extract design tokens only (fonts, colors, shadows) |
 | `slices` | Extract icon & image assets for download |
 
-The `analyze` mode supports an `include` parameter to control output: `html`, `image`, `tokens`, `layout`, `layers`, `slices`. Default: `["html", "tokens"]`.
+The `analyze` mode supports an `include` parameter to control output: `html`, `image`, `tokens`, `layout`, `layers`, `slices`. Default: `["html", "tokens", "layers", "image"]`. For `layers`, set `layer_depth` to `4` (default), `0` for top-level layers only, or `"all"` for the complete tree. Each design reports `success`, `partial_success`, or `error`, and structured layer annotations are returned in `layer_annotations`.
 
 ### `lanhu_page` — PRD / Prototype Analysis
 
