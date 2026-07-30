@@ -164,10 +164,11 @@ export function extractFullAnnotationsFromSketch(
   const imageLayers: ImageEntry[] = [];
   const groupStructure: GroupEntry[] = [];
   const textWarnings = new Set<string>();
+  const textOptions = { allowLegacyLayerName: structure.kind === "info" };
 
   const normalizeText = (layer: UnknownRecord, type: string): SketchTextNormalizationResult | undefined => {
     if (type !== "textLayer") return undefined;
-    const normalized = normalizeSketchTextLayer(layer);
+    const normalized = normalizeSketchTextLayer(layer, textOptions);
     for (const warning of normalized.warnings) textWarnings.add(warning);
     return normalized;
   };

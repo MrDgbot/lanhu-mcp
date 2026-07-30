@@ -186,42 +186,35 @@ describe("extractSketchLayerAnnotations", () => {
 
 describe("legacy info Sketch", () => {
   it("renders actual legacy layers into HTML and structured annotations", () => {
-    const result = convertSketchToHtml(legacyInfoSketch, 2.0);
+    const result = convertSketchToHtml(legacyInfoSketch, 1.0);
 
     expect(result.html).toMatch(/<div[^>]*>15s<\/div>/);
+    expect(result.html).toMatch(/<div[^>]*>Your loan amount is<\/div>/);
     expect(result.html).toContain("width:375px");
-    expect(result.layerAnnotations.map((annotation) => annotation.name)).toEqual([
-      "Legacy icon",
-      "Legacy card",
-      "15s",
-    ]);
-    const textAnnotation = result.layerAnnotations.find((annotation) => annotation.type === "textLayer");
+    expect(result.layerAnnotations).toHaveLength(8);
+    expect(result.layerAnnotations.map((annotation) => annotation.name)).toEqual(
+      expect.arrayContaining(["Time", "15s", "Your loan amount is"]),
+    );
+    const textAnnotation = result.layerAnnotations.find((annotation) => annotation.name === "15s");
     expect(textAnnotation).toMatchObject({
       name: "15s",
       text: "15s",
-      css: {
-        color: "rgba(30,30,30,1)",
-        "font-size": "16px",
-        "font-family": "SF Pro Display",
-        "font-weight": "600",
-        "text-align": "center",
-        "line-height": "20px",
-        "letter-spacing": "0.6px",
-      },
     });
-    expect(result.warnings).toEqual([]);
-    expect(result.imageUrlMapping).toEqual({
-      "./assets/slices/Legacy_icon.png": "https://cdn.example.com/legacy-icon.png",
-    });
+    expect(result.warnings).toHaveLength(8);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      'Legacy info textLayer "15s" recovered text from layer.name but has no recognizable font or color style fields.',
+      'Legacy info textLayer "Your loan amount is" recovered text from layer.name but has no recognizable font or color style fields.',
+    ]));
+    expect(result.imageUrlMapping).toEqual({});
   });
 
   it("produces useful formatted annotations with inferred canvas data", () => {
-    const annotations = extractFullAnnotationsFromSketch(legacyInfoSketch, 2.0);
+    const annotations = extractFullAnnotationsFromSketch(legacyInfoSketch, 1.0);
 
     expect(annotations).toContain("画布尺寸: 375x667");
     expect(annotations).toContain('"15s"');
-    expect(annotations).toContain("font-size: 16px");
-    expect(annotations).toContain("font-family: SF Pro Display");
+    expect(annotations).toContain('"Your loan amount is"');
+    expect(annotations).toContain("recovered text from layer.name");
     expect(annotations).not.toContain("画布尺寸: 0x0");
   });
 
@@ -229,10 +222,10 @@ describe("legacy info Sketch", () => {
     const result = convertSketchToHtml({
       ...legacyInfoSketch,
       board: { layers: [] },
-    }, 2.0);
+    }, 1.0);
 
     expect(result.html).toMatch(/<div[^>]*>15s<\/div>/);
-    expect(result.layerAnnotations).toHaveLength(3);
+    expect(result.layerAnnotations).toHaveLength(8);
   });
 
   it("warns instead of using a layer name for unrecognized visible text", () => {

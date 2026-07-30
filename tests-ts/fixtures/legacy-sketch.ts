@@ -1,58 +1,56 @@
 export const legacyInfoSketch = {
-  device: "iPhone 12 @2x",
-  psdName: "legacy-home.psd",
-  width: 750,
-  height: 1334,
+  device: "iOS @1x",
+  width: 375,
+  height: 667,
+  // Sanitized from the observed info-layer shape. The source has no textInfo or text fields.
   info: [
     {
-      ddsType: "groupLayer",
-      name: "Content",
+      ddsType: "textLayer",
+      name: "Time",
       visible: true,
-      ddsOriginFrame: { x: 0, y: 0, width: 750, height: 1334 },
-      layers: [
-        {
-          ddsType: "textLayer",
-          name: "15s",
-          visible: true,
-          layerOriginFrame: { x: 32, y: 96, width: 360, height: 48 },
-          textInfo: [
-            {
-              text: "15s",
-              color: { red: 30, green: 30, blue: 30, value: "rgba(30,30,30,1)" },
-              font: {
-                name: "SF Pro Display",
-                postScriptName: "SFProDisplay-Semibold",
-                type: "Semibold",
-                size: 32,
-                weight: 600,
-                italic: false,
-                align: "center",
-                lineHeight: { value: 40, unit: "pixels" },
-                letterSpacing: { value: 1.2, unit: "pixels" },
-              },
-            },
-          ],
-        },
-        {
-          ddsType: "shapeLayer",
-          name: "Legacy card",
-          visible: true,
-          ddsOriginFrame: { x: 32, y: 180, width: 686, height: 320 },
-          fills: [
-            { isEnabled: true, color: { value: "rgba(255,255,255,1)" } },
-          ],
-        },
-        {
-          ddsType: "bitmapLayer",
-          name: "Legacy icon",
-          visible: true,
-          ddsOriginFrame: { x: 640, y: 220, width: 48, height: 48 },
-          ddsImage: {
-            imageUrl: "https://cdn.example.com/legacy-icon.png",
-            size: "48x48",
-          },
-        },
-      ],
+      layerOriginFrame: { x: 21.3, y: 14, width: 54, height: 20 },
+    },
+    {
+      ddsType: "textLayer",
+      name: "Сіздің несиеңіз дайы",
+      visible: true,
+      layerOriginFrame: { x: 66, y: 161, width: 243, height: 44 },
+    },
+    {
+      ddsType: "textLayer",
+      name: "15s",
+      visible: true,
+      layerOriginFrame: { x: 155, y: 94, width: 64, height: 49 },
+    },
+    {
+      ddsType: "textLayer",
+      name: "Your loan amount is",
+      visible: true,
+      layerOriginFrame: { x: 34, y: 254, width: 307, height: 14 },
+    },
+    {
+      ddsType: "textLayer",
+      name: "Сіздің несие балыңыз",
+      visible: true,
+      layerOriginFrame: { x: 71, y: 246, width: 270, height: 36 },
+    },
+    {
+      ddsType: "textLayer",
+      name: "Несие сомасын есепте",
+      visible: true,
+      layerOriginFrame: { x: 71, y: 322, width: 228, height: 18 },
+    },
+    {
+      ddsType: "textLayer",
+      name: "Несие қаражатын сәйк",
+      visible: true,
+      layerOriginFrame: { x: 71, y: 388, width: 274, height: 17 },
+    },
+    {
+      ddsType: "textLayer",
+      name: "Банк төлем арнасын т",
+      visible: true,
+      layerOriginFrame: { x: 71, y: 456, width: 270, height: 17 },
     },
   ],
 };

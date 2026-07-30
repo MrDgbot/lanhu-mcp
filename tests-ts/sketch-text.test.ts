@@ -40,7 +40,7 @@ describe("normalizeSketchTextLayer", () => {
     });
   });
 
-  it("joins production-shaped legacy textInfo runs and preserves per-run styles", () => {
+  it("joins textInfo runs and preserves per-run styles", () => {
     const result = normalizeSketchTextLayer({
       ddsType: "textLayer",
       name: "loan status",
@@ -158,5 +158,53 @@ describe("normalizeSketchTextLayer", () => {
       "Unsupported visible textLayer \"Layer name is not content\": " +
         "textInfo array contains no string text values.",
     ]);
+  });
+
+  it("uses layer.name only for legacy info textLayers without text fields", () => {
+    const layer = {
+      ddsType: "textLayer",
+      name: "15s",
+      visible: true,
+      layerOriginFrame: { x: 32, y: 96, width: 360, height: 48 },
+    };
+
+    const withoutLegacyContext = normalizeSketchTextLayer(layer);
+    const legacy = normalizeSketchTextLayer(layer, { allowLegacyLayerName: true });
+
+    expect(withoutLegacyContext.value).toBeUndefined();
+    expect(legacy.value).toMatchObject({
+      text: "15s",
+      source: "legacy-layer-name",
+      runs: [{ text: "15s" }],
+    });
+    expect(legacy.warnings).toEqual([
+      'Legacy info textLayer "15s" recovered text from layer.name but has no recognizable font or color style fields.',
+    ]);
+  });
+
+  it("does not hide malformed textInfo behind the legacy layer.name fallback", () => {
+    const result = normalizeSketchTextLayer({
+      ddsType: "textLayer",
+      name: "Layer name is not content",
+      textInfo: [{ font: { size: 20 } }],
+    }, { allowLegacyLayerName: true });
+
+    expect(result.value).toBeUndefined();
+    expect(result.warnings).toEqual([
+      'Unsupported visible textLayer "Layer name is not content": ' +
+        "textInfo array contains no string text values.",
+    ]);
+  });
+
+  it("preserves an explicit empty string instead of replacing it with layer.name", () => {
+    const result = normalizeSketchTextLayer({
+      ddsType: "textLayer",
+      name: "Decorative placeholder",
+      textInfo: [{ text: "", font: { size: 20 } }],
+    }, { allowLegacyLayerName: true });
+
+    expect(result.value?.text).toBe("");
+    expect(result.value?.source).toBe("textInfo-array");
+    expect(result.warnings).toEqual([]);
   });
 });

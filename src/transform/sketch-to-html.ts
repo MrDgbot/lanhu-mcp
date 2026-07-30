@@ -303,6 +303,7 @@ function analyzeSketch(
   const imageUrlMapping: Record<string, string> = {};
   const layerAnnotations: LayerAnnotation[] = [];
   const warnings = collectSketchTextWarnings(sketchData);
+  const textOptions = { allowLegacyLayerName: structure.kind === "info" };
 
   for (let idx = 0; idx < layers.length; idx++) {
     const L = layers[idx];
@@ -375,7 +376,7 @@ function analyzeSketch(
     }
 
     if (ltype === "textLayer") {
-      const normalized = normalizeSketchTextLayer(L).value;
+      const normalized = normalizeSketchTextLayer(L, textOptions).value;
       const textStyle = normalized?.style ?? {};
       textContent = normalized?.text ?? "";
       if (normalized) annot.text = textContent;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractDesignTokens,
+  extractDesignTokensResult,
   extractLayerTree,
   extractLayerTreeResult,
 } from "../src/transform/design-tokens.js";
@@ -132,8 +133,30 @@ describe("extractDesignTokens (refactored)", () => {
     );
   });
 
-  it("extracts font and text color tokens from legacy textInfo runs", () => {
-    const tokens = extractDesignTokens(legacyInfoSketch);
+  it("reports missing text styles for production-shaped legacy name fallback", () => {
+    const result = extractDesignTokensResult(legacyInfoSketch);
+
+    expect(result.tokens).not.toContain("Fonts");
+    expect(result.tokens).not.toContain("Colors");
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('Legacy info textLayer "15s" recovered text from layer.name'),
+      expect.stringContaining('Legacy info textLayer "Your loan amount is" recovered text from layer.name'),
+    ]));
+  });
+
+  it("extracts font and text color tokens when legacy textInfo runs provide them", () => {
+    const tokens = extractDesignTokens({
+      info: [{
+        ddsType: "textLayer",
+        name: "Styled text",
+        visible: true,
+        textInfo: [{
+          text: "Styled text",
+          color: { value: "rgba(30,30,30,1)" },
+          font: { name: "SF Pro Display", type: "Semibold", size: 32, weight: 600 },
+        }],
+      }],
+    });
 
     expect(tokens).toContain("Fonts");
     expect(tokens).toContain("SF Pro Display");
@@ -207,17 +230,17 @@ describe("extractLayerTree", () => {
   it("supports legacy info-format Sketch data", () => {
     const result = extractLayerTreeResult(legacyInfoSketch);
 
-    expect(result.tree).toContain("Legacy Sketch: legacy-home.psd (750x1334)");
+    expect(result.tree).toContain("Legacy Sketch: Untitled (375x667)");
     expect(result.tree).toContain('textLayer: 15s');
     expect(result.tree).toContain('"15s"');
-    expect(result.tree).toContain("bitmapLayer: Legacy icon");
+    expect(result.tree).toContain('"Your loan amount is"');
   });
 
-  it("returns only top-level layers at depth 0", () => {
+  it("returns all production-shaped top-level legacy layers at depth 0", () => {
     const result = extractLayerTreeResult(legacyInfoSketch, 0);
 
-    expect(result.tree).toContain("groupLayer: Content");
-    expect(result.tree).not.toContain("textLayer: 15s");
-    expect(result.truncated).toBe(true);
+    expect(result.tree).toContain('textLayer: 15s (64x49 @155,94) "15s"');
+    expect(result.tree).toContain('textLayer: Your loan amount is (307x14 @34,254) "Your loan amount is"');
+    expect(result.truncated).toBe(false);
   });
 });

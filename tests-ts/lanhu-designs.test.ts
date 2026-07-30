@@ -7,7 +7,6 @@ import {
   getSketchJson,
   listDesigns,
 } from "../src/lanhu/designs.js";
-import { legacyInfoSketch } from "./fixtures/legacy-sketch.js";
 
 function createJsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -241,6 +240,23 @@ describe("getSketchJson", () => {
 
 describe("Sketch slice extraction", () => {
   it("extracts legacy info slices from an already-loaded Sketch result", () => {
+    const legacySliceSketch = {
+      width: 375,
+      height: 667,
+      info: [{
+        ddsType: "groupLayer",
+        name: "Content",
+        layers: [{
+          ddsType: "bitmapLayer",
+          name: "Legacy icon",
+          ddsOriginFrame: { x: 320, y: 110, width: 24, height: 24 },
+          ddsImage: {
+            imageUrl: "https://cdn.example.com/legacy-icon.png",
+            size: "24x24",
+          },
+        }],
+      }],
+    };
     const result = createSlicesResultFromSketch({
       imageId: "design-1",
       versionId: "version-1",
@@ -251,7 +267,7 @@ describe("Sketch slice extraction", () => {
         height: 667,
         versions: [{ version_info: "v1" }],
       },
-      sketch: legacyInfoSketch,
+      sketch: legacySliceSketch,
     });
 
     expect(result).toMatchObject({
@@ -263,8 +279,8 @@ describe("Sketch slice extraction", () => {
     expect(result.slices[0]).toMatchObject({
       name: "Legacy icon",
       downloadUrl: "https://cdn.example.com/legacy-icon.png",
-      size: "48x48",
-      position: { x: 640, y: 220 },
+      size: "24x24",
+      position: { x: 320, y: 110 },
       layerPath: "Content/Legacy icon",
     });
   });

@@ -250,39 +250,45 @@ describe("lanhu_design analyze output status", () => {
     expect(mocks.getSketchJson).toHaveBeenCalledOnce();
   });
 
-  it("analyzes production-shaped legacy text across all Sketch-derived outputs", async () => {
+  it("recovers production-shaped legacy text and marks missing styles as degraded", async () => {
     mockDesignList("detailDetach");
     mocks.getSketchJson.mockResolvedValue(makeSketchResult(legacyInfoSketch));
 
     const result = await analyze(["html", "layout", "layers", "tokens"]);
     const design = getStructured(result).designs[0];
 
-    expect(design.status).toBe("success");
-    expect(design.outputs.html.status).toBe("success");
-    expect(design.outputs.layout.status).toBe("success");
-    expect(design.outputs.layers.status).toBe("success");
-    expect(design.outputs.tokens.status).toBe("success");
+    expect(getStructured(result).status).toBe("partial_success");
+    expect(result.isError).toBeUndefined();
+    expect(design.status).toBe("partial_success");
+    expect(design.outputs.html.status).toBe("partial_success");
+    expect(design.outputs.layout.status).toBe("partial_success");
+    expect(design.outputs.layers.status).toBe("partial_success");
+    expect(design.outputs.tokens.status).toBe("partial_success");
     expect(design.html_code).toMatch(/<div[^>]*>15s<\/div>/);
+    expect(design.html_code).toMatch(/<div[^>]*>Your loan amount is<\/div>/);
     expect(design.layout_source).toBe("sketch");
     expect(design.layout_summary).toContain('"15s" 15s');
     expect(design.layer_tree).toContain("textLayer: 15s");
     expect(design.layer_annotations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "15s", text: "15s" }),
-        expect.objectContaining({ name: "Legacy icon" }),
+        expect.objectContaining({ name: "Your loan amount is", text: "Your loan amount is" }),
       ]),
     );
+    expect(design.layer_annotations.filter((layer: Record<string, unknown>) => layer.type === "textLayer"))
+      .toHaveLength(8);
     expect(design.sketch_annotations).toContain("画布尺寸: 375x667");
-    expect(design.sketch_annotations).toContain("font-family: SF Pro Display");
-    expect(design.design_tokens).toContain("Fonts");
-    expect(design.design_tokens).toContain("SF Pro Display");
-    expect(design.design_tokens).toContain("rgba(30,30,30,1)");
+    expect(design.sketch_annotations).toContain('"Your loan amount is"');
+    expect(design.design_tokens).not.toContain("Fonts");
+    expect(design.design_tokens).not.toContain("Colors");
+    expect(design.warnings.tokens).toContain("no recognizable font or color style fields");
+    expect(design.errors).toEqual({});
     expect(mocks.getSketchJson).toHaveBeenCalledOnce();
   });
 
   it("keeps annotations and the Schema failure reason for HTML-only Sketch fallback", async () => {
     mocks.getDesignSchemaJson.mockRejectedValue(new Error("schema unavailable"));
-    mocks.getSketchJson.mockResolvedValue(makeSketchResult(legacyInfoSketch));
+    mocks.getSketchJson.mockResolvedValue(makeSketchResult(sketchFixture));
 
     const result = await analyze(["html"]);
     const design = getStructured(result).designs[0];
@@ -291,9 +297,9 @@ describe("lanhu_design analyze output status", () => {
     expect(result.isError).toBeUndefined();
     expect(design.status).toBe("success");
     expect(design.html_source).toBe("sketch");
-    expect(design.html_code).toMatch(/<div[^>]*>15s<\/div>/);
-    expect(design.layer_annotations).toHaveLength(3);
-    expect(design.sketch_annotations).toContain('"15s"');
+    expect(design.html_code).toMatch(/<div[^>]*>Hello<\/div>/);
+    expect(design.layer_annotations).toHaveLength(1);
+    expect(design.sketch_annotations).toContain('"Hello"');
     expect(design.errors).toEqual({});
     expect(design.warnings.html).toContain("schema unavailable");
     expect(getText(result)).toContain("schema unavailable");
@@ -307,7 +313,10 @@ describe("lanhu_design analyze output status", () => {
     const design = getStructured(result).designs[0];
     const warning = "textInfo array contains no string text values";
 
-    expect(design.status).toBe("success");
+    expect(getStructured(result).status).toBe("partial_success");
+    expect(result.isError).toBeUndefined();
+    expect(design.status).toBe("partial_success");
+    expect(design.success).toBe(false);
     expect(design.html_code).not.toMatch(/>Layer name is not content<\/div>/);
     expect(design.layer_annotations[0].text).toBeUndefined();
     expect(design.sketch_annotations).toContain("文本解析警告");
@@ -319,6 +328,11 @@ describe("lanhu_design analyze output status", () => {
     expect(design.outputs.layout.warning).toContain(warning);
     expect(design.outputs.layers.warning).toContain(warning);
     expect(design.outputs.tokens.warning).toContain(warning);
+    expect(design.outputs.html.status).toBe("partial_success");
+    expect(design.outputs.layout.status).toBe("partial_success");
+    expect(design.outputs.layers.status).toBe("partial_success");
+    expect(design.outputs.tokens.status).toBe("partial_success");
+    expect(design.errors).toEqual({});
     expect(getText(result)).toContain(warning);
     expect(getText(result)).not.toContain("Failed: Unknown");
   });

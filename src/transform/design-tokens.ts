@@ -93,6 +93,7 @@ export function extractLayerTreeResult(
   maxDepth: LayerDepth = 4,
 ): LayerTreeResult {
   const structure = resolveSketchStructure(sketch);
+  const textOptions = { allowLegacyLayerName: structure.kind === "info" };
 
   const lines: string[] = [];
   let truncated = false;
@@ -137,7 +138,7 @@ export function extractLayerTreeResult(
     let line = `${"  ".repeat(depth)}${type}: ${name} (${Math.round(dimensions.w)}x${Math.round(dimensions.h)} @${Math.round(dimensions.x)},${Math.round(dimensions.y)})`;
 
     if (type === "textLayer") {
-      const rawValue = normalizeSketchTextLayer(layer).value?.text ?? "";
+      const rawValue = normalizeSketchTextLayer(layer, textOptions).value?.text ?? "";
       const clipped = rawValue.length > 40 ? `${rawValue.slice(0, 40)}...` : rawValue;
       if (clipped) {
         line += ` "${clipped}"`;
@@ -187,6 +188,8 @@ export interface DesignTokensResult {
 }
 
 export function extractDesignTokensResult(sketch: UnknownRecord): DesignTokensResult {
+  const structure = resolveSketchStructure(sketch);
+  const textOptions = { allowLegacyLayerName: structure.kind === "info" };
   const colors = new Map<string, number>();
   const fonts = new Map<string, number>();
   const gradients = new Map<string, number>();
@@ -265,7 +268,7 @@ export function extractDesignTokensResult(sketch: UnknownRecord): DesignTokensRe
     }
 
     if (getSketchLayerType(layer) === "textLayer") {
-      const normalized = normalizeSketchTextLayer(layer);
+      const normalized = normalizeSketchTextLayer(layer, textOptions);
       for (const warning of normalized.warnings) warnings.add(warning);
       if (normalized.value) {
         for (const run of normalized.value.runs) {
@@ -279,7 +282,6 @@ export function extractDesignTokensResult(sketch: UnknownRecord): DesignTokensRe
     for (const child of children) walk(child);
   };
 
-  const structure = resolveSketchStructure(sketch);
   for (const layer of structure.layers) walk(layer);
 
   const sortedEntries = (map: Map<string, number>): [string, number][] =>

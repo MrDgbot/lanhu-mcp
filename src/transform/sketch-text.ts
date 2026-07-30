@@ -27,12 +27,16 @@ export interface NormalizedSketchText {
   runs: NormalizedSketchTextRun[];
   style: NormalizedSketchTextStyle;
   fontName?: string;
-  source: "textInfo-array" | "textInfo-object" | "layer-text";
+  source: "textInfo-array" | "textInfo-object" | "layer-text" | "legacy-layer-name";
 }
 
 export interface SketchTextNormalizationResult {
   value?: NormalizedSketchText;
   warnings: string[];
+}
+
+export interface SketchTextNormalizationOptions {
+  allowLegacyLayerName?: boolean;
 }
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
@@ -57,7 +61,11 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function normalizeFontWeight(value: unknown, styleName: string | undefined, bold: boolean): string | number | undefined {
+function normalizeFontWeight(
+  value: unknown,
+  styleName: string | undefined,
+  bold: boolean | undefined,
+): string | number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) return value.trim();
 
@@ -70,15 +78,16 @@ function normalizeFontWeight(value: unknown, styleName: string | undefined, bold
   if (normalized.includes("bold")) return 700;
   if (normalized.includes("medium")) return 500;
   if (normalized.includes("regular") || normalized.includes("normal")) return 400;
-  return bold ? 700 : undefined;
+  return bold === true ? 700 : undefined;
 }
 
 function normalizeStyle(source: UnknownRecord, nestedFont?: UnknownRecord): NormalizedSketchTextStyle {
   const font = nestedFont ?? (isRecord(source.font) ? source.font : {});
   const styleName = asString(source.fontStyleName) ?? asString(font.type) ?? asString(font.style);
-  const bold = asBoolean(source.bold) ?? asBoolean(font.bold) ?? false;
-  const italic = asBoolean(source.italic) ?? asBoolean(font.italic) ??
-    Boolean(styleName?.toLowerCase().includes("italic"));
+  const bold = asBoolean(source.bold) ?? asBoolean(font.bold);
+  const explicitItalic = asBoolean(source.italic) ?? asBoolean(font.italic);
+  const italic = explicitItalic ??
+    (styleName ? styleName.toLowerCase().includes("italic") : undefined);
   const color = isRecord(source.color)
     ? source.color
     : isRecord(font.color)
@@ -141,7 +150,21 @@ function warningPrefix(layer: UnknownRecord): string {
   return `Unsupported visible textLayer "${String(layer.name ?? "?")}"`;
 }
 
-export function normalizeSketchTextLayer(layer: UnknownRecord): SketchTextNormalizationResult {
+function missingLegacyStyleFields(style: NormalizedSketchTextStyle): string[] {
+  const missing: string[] = [];
+  const hasFont = style.fontFamily !== undefined ||
+    style.fontPostScriptName !== undefined ||
+    style.fontSize !== undefined ||
+    style.fontWeight !== undefined;
+  if (!hasFont) missing.push("font");
+  if (style.color === undefined) missing.push("color");
+  return missing;
+}
+
+export function normalizeSketchTextLayer(
+  layer: UnknownRecord,
+  options: SketchTextNormalizationOptions = {},
+): SketchTextNormalizationResult {
   const warnings: string[] = [];
   const textInfo = layer.textInfo;
 
@@ -208,6 +231,33 @@ export function normalizeSketchTextLayer(layer: UnknownRecord): SketchTextNormal
     };
   }
 
+  const layerName = asString(layer.name);
+  const canUseLegacyName = options.allowLegacyLayerName === true &&
+    !hasOwn(layer, "textInfo") &&
+    !hasOwn(layer, "text") &&
+    layerName !== undefined &&
+    layerName.trim().length > 0;
+  if (canUseLegacyName) {
+    const style = normalizeStyle(layer);
+    const missingStyle = missingLegacyStyleFields(style);
+    const run = { text: layerName, ...style };
+    return {
+      value: {
+        text: layerName,
+        runs: [run],
+        style,
+        fontName: style.fontFamily ?? style.fontPostScriptName,
+        source: "legacy-layer-name",
+      },
+      warnings: missingStyle.length > 0
+        ? [
+            `Legacy info textLayer "${layerName}" recovered text from layer.name but has no ` +
+            `recognizable ${missingStyle.join(" or ")} style fields.`,
+          ]
+        : [],
+    };
+  }
+
   const reason = Array.isArray(textInfo)
     ? "textInfo array contains no string text values"
     : isRecord(textInfo)
@@ -221,6 +271,7 @@ export function normalizeSketchTextLayer(layer: UnknownRecord): SketchTextNormal
 
 export function collectSketchTextWarnings(sketch: UnknownRecord): string[] {
   const structure = resolveSketchStructure(sketch);
+  const options = { allowLegacyLayerName: structure.kind === "info" };
   const warnings = new Set<string>();
   const visited = new Set<UnknownRecord>();
 
@@ -228,7 +279,7 @@ export function collectSketchTextWarnings(sketch: UnknownRecord): string[] {
     if (visited.has(layer) || !isSketchLayerVisible(layer)) return;
     visited.add(layer);
     if (getSketchLayerType(layer) === "textLayer") {
-      for (const warning of normalizeSketchTextLayer(layer).warnings) warnings.add(warning);
+      for (const warning of normalizeSketchTextLayer(layer, options).warnings) warnings.add(warning);
     }
     const children = Array.isArray(layer.layers) ? layer.layers.filter(isRecord) : [];
     for (const child of children) walk(child);

@@ -92,6 +92,7 @@ type AnalysisStatus = "success" | "partial_success" | "error";
 interface DesignAnalysisResult {
   designName: string;
   succeededOutputs: Set<IncludeOption>;
+  degradedOutputs: Set<IncludeOption>;
   errors: Partial<Record<IncludeOption, string>>;
   warnings: Partial<Record<IncludeOption, string>>;
   htmlCode?: string;
@@ -126,11 +127,12 @@ function combineFallbackErrors(primary: string | undefined, fallback: string): s
 }
 
 function getAnalysisStatus(
-  result: Pick<DesignAnalysisResult, "succeededOutputs">,
+  result: Pick<DesignAnalysisResult, "succeededOutputs" | "degradedOutputs">,
   requestedOutputs: ReadonlySet<IncludeOption>,
 ): AnalysisStatus {
   const succeeded = [...requestedOutputs].filter((output) => result.succeededOutputs.has(output)).length;
-  if (succeeded === requestedOutputs.size) return "success";
+  const degraded = [...requestedOutputs].some((output) => result.degradedOutputs.has(output));
+  if (succeeded === requestedOutputs.size && !degraded) return "success";
   return succeeded > 0 ? "partial_success" : "error";
 }
 
@@ -288,6 +290,7 @@ export function registerDesignTool(server: McpServer): void {
           const analysisResult: DesignAnalysisResult = {
             designName: design.name,
             succeededOutputs: new Set<IncludeOption>(),
+            degradedOutputs: new Set<IncludeOption>(),
             errors: {},
             warnings: {},
           };
@@ -308,6 +311,7 @@ export function registerDesignTool(server: McpServer): void {
           const addTextWarnings = (output: IncludeOption, warnings: string[]): void => {
             if (warnings.length > 0) {
               addWarning(output, `Sketch text warnings: ${warnings.join(" ")}`);
+              analysisResult.degradedOutputs.add(output);
             }
           };
 
@@ -544,6 +548,7 @@ export function registerDesignTool(server: McpServer): void {
             analysisResults.push({
               designName: targetDesigns[index]?.name ?? "Unnamed design",
               succeededOutputs: new Set<IncludeOption>(),
+              degradedOutputs: new Set<IncludeOption>(),
               warnings: {},
               errors: Object.fromEntries(
                 [...includeSet].map((output) => [output, `Design processing failed: ${message}`]),
@@ -558,7 +563,9 @@ export function registerDesignTool(server: McpServer): void {
           (sum, result) => sum + result.succeededOutputs.size,
           0,
         );
-        const overallStatus: AnalysisStatus = totalSucceededOutputs === totalRequestedOutputs
+        const hasDegradedOutput = analysisResults.some((result) => result.degradedOutputs.size > 0);
+        const overallStatus: AnalysisStatus =
+          totalSucceededOutputs === totalRequestedOutputs && !hasDegradedOutput
           ? "success"
           : totalSucceededOutputs > 0
             ? "partial_success"
@@ -692,7 +699,7 @@ export function registerDesignTool(server: McpServer): void {
               output,
               result.succeededOutputs.has(output)
                 ? {
-                    status: "success",
+                    status: result.degradedOutputs.has(output) ? "partial_success" : "success",
                     ...(result.warnings[output] ? { warning: result.warnings[output] } : {}),
                   }
                 : { status: "error", error: result.errors[output] },
