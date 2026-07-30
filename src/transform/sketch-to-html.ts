@@ -10,6 +10,7 @@ import {
   collectSketchTextWarnings,
   normalizeSketchTextLayer,
   sketchColorToCss,
+  type SketchTextSource,
 } from "./sketch-text.js";
 
 export interface LayerAnnotation {
@@ -17,6 +18,7 @@ export interface LayerAnnotation {
   type: string;
   css: Record<string, string>;
   text?: string;
+  text_source?: SketchTextSource;
   slice_url?: string;
 }
 
@@ -379,7 +381,10 @@ function analyzeSketch(
       const normalized = normalizeSketchTextLayer(L, textOptions).value;
       const textStyle = normalized?.style ?? {};
       textContent = normalized?.text ?? "";
-      if (normalized) annot.text = textContent;
+      if (normalized) {
+        annot.text = textContent;
+        annot.text_source = normalized.source;
+      }
       props.push("z-index:10");
       const textColor = colorCss(textStyle.color, opacity);
       if (textColor) {

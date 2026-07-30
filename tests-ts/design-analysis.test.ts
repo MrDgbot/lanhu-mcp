@@ -250,7 +250,7 @@ describe("lanhu_design analyze output status", () => {
     expect(mocks.getSketchJson).toHaveBeenCalledOnce();
   });
 
-  it("recovers production-shaped legacy text and marks missing styles as degraded", async () => {
+  it("degrades text-dependent outputs while keeping complete legacy tokens successful", async () => {
     mockDesignList("detailDetach");
     mocks.getSketchJson.mockResolvedValue(makeSketchResult(legacyInfoSketch));
 
@@ -263,7 +263,7 @@ describe("lanhu_design analyze output status", () => {
     expect(design.outputs.html.status).toBe("partial_success");
     expect(design.outputs.layout.status).toBe("partial_success");
     expect(design.outputs.layers.status).toBe("partial_success");
-    expect(design.outputs.tokens.status).toBe("partial_success");
+    expect(design.outputs.tokens.status).toBe("success");
     expect(design.html_code).toMatch(/<div[^>]*>15s<\/div>/);
     expect(design.html_code).toMatch(/<div[^>]*>Your loan amount is<\/div>/);
     expect(design.layout_source).toBe("sketch");
@@ -271,17 +271,29 @@ describe("lanhu_design analyze output status", () => {
     expect(design.layer_tree).toContain("textLayer: 15s");
     expect(design.layer_annotations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: "15s", text: "15s" }),
-        expect.objectContaining({ name: "Your loan amount is", text: "Your loan amount is" }),
+        expect.objectContaining({
+          name: "15s",
+          text: "15s",
+          text_source: "legacy-layer-name",
+        }),
+        expect.objectContaining({
+          name: "Your loan amount is",
+          text: "Your loan amount is",
+          text_source: "legacy-layer-name",
+        }),
       ]),
     );
     expect(design.layer_annotations.filter((layer: Record<string, unknown>) => layer.type === "textLayer"))
       .toHaveLength(8);
     expect(design.sketch_annotations).toContain("画布尺寸: 375x667");
     expect(design.sketch_annotations).toContain('"Your loan amount is"');
-    expect(design.design_tokens).not.toContain("Fonts");
-    expect(design.design_tokens).not.toContain("Colors");
-    expect(design.warnings.tokens).toContain("no recognizable font or color style fields");
+    expect(design.design_tokens).toContain("Fonts (5 unique)");
+    expect(design.design_tokens).toContain("Colors (5 unique)");
+    expect(design.warnings.html).toContain("recovered heuristically from layer.name");
+    expect(design.warnings.layout).toContain("recovered heuristically from layer.name");
+    expect(design.warnings.layers).toContain("recovered heuristically from layer.name");
+    expect(design.warnings.tokens).toBeUndefined();
+    expect(design.outputs.tokens.warning).toBeUndefined();
     expect(design.errors).toEqual({});
     expect(mocks.getSketchJson).toHaveBeenCalledOnce();
   });

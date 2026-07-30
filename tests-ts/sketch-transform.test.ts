@@ -178,7 +178,12 @@ describe("extractSketchLayerAnnotations", () => {
     expect(annotations).toHaveLength(4);
     expect(annotations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: "title", type: "textLayer", text: "Hello World" }),
+        expect.objectContaining({
+          name: "title",
+          type: "textLayer",
+          text: "Hello World",
+          text_source: "textInfo-object",
+        }),
       ]),
     );
   });
@@ -199,11 +204,14 @@ describe("legacy info Sketch", () => {
     expect(textAnnotation).toMatchObject({
       name: "15s",
       text: "15s",
+      text_source: "legacy-layer-name",
     });
     expect(result.warnings).toHaveLength(8);
     expect(result.warnings).toEqual(expect.arrayContaining([
-      'Legacy info textLayer "15s" recovered text from layer.name but has no recognizable font or color style fields.',
-      'Legacy info textLayer "Your loan amount is" recovered text from layer.name but has no recognizable font or color style fields.',
+      'Legacy info textLayer "15s": Text was recovered heuristically from layer.name and may be ' +
+        "truncated or differ from rendered content.",
+      'Legacy info textLayer "Your loan amount is": Text was recovered heuristically from ' +
+        "layer.name and may be truncated or differ from rendered content.",
     ]));
     expect(result.imageUrlMapping).toEqual({});
   });
@@ -214,7 +222,7 @@ describe("legacy info Sketch", () => {
     expect(annotations).toContain("画布尺寸: 375x667");
     expect(annotations).toContain('"15s"');
     expect(annotations).toContain('"Your loan amount is"');
-    expect(annotations).toContain("recovered text from layer.name");
+    expect(annotations).toContain("recovered heuristically from layer.name");
     expect(annotations).not.toContain("画布尺寸: 0x0");
   });
 

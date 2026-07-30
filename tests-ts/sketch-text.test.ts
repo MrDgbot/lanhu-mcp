@@ -160,12 +160,15 @@ describe("normalizeSketchTextLayer", () => {
     ]);
   });
 
-  it("uses layer.name only for legacy info textLayers without text fields", () => {
+  it("marks a generic legacy layer.name as heuristic even with complete text styles", () => {
     const layer = {
       ddsType: "textLayer",
-      name: "15s",
+      name: "Time",
+      color: { value: "rgba(0,0,0,1)" },
+      size: 15,
+      justification: "center",
       visible: true,
-      layerOriginFrame: { x: 32, y: 96, width: 360, height: 48 },
+      layerOriginFrame: { x: 21.3, y: 14, width: 54, height: 20 },
     };
 
     const withoutLegacyContext = normalizeSketchTextLayer(layer);
@@ -173,13 +176,42 @@ describe("normalizeSketchTextLayer", () => {
 
     expect(withoutLegacyContext.value).toBeUndefined();
     expect(legacy.value).toMatchObject({
-      text: "15s",
+      text: "Time",
       source: "legacy-layer-name",
-      runs: [{ text: "15s" }],
+      runs: [{
+        text: "Time",
+        color: { value: "rgba(0,0,0,1)" },
+        fontSize: 15,
+        alignment: "center",
+      }],
     });
     expect(legacy.warnings).toEqual([
-      'Legacy info textLayer "15s" recovered text from layer.name but has no recognizable font or color style fields.',
+      'Legacy info textLayer "Time": Text was recovered heuristically from layer.name and may be ' +
+        "truncated or differ from rendered content.",
     ]);
+    expect(legacy.tokenWarnings).toEqual([]);
+  });
+
+  it("marks a truncated legacy layer.name as heuristic instead of exact content", () => {
+    const result = normalizeSketchTextLayer({
+      ddsType: "textLayer",
+      name: "Your loan amount is",
+      color: { value: "rgba(51,51,51,1)" },
+      size: 12,
+      justification: "left",
+      visible: true,
+      layerOriginFrame: { x: 34, y: 254, width: 307, height: 14 },
+    }, { allowLegacyLayerName: true });
+
+    expect(result.value).toMatchObject({
+      text: "Your loan amount is",
+      source: "legacy-layer-name",
+    });
+    expect(result.warnings).toEqual([
+      'Legacy info textLayer "Your loan amount is": Text was recovered heuristically from ' +
+        "layer.name and may be truncated or differ from rendered content.",
+    ]);
+    expect(result.tokenWarnings).toEqual([]);
   });
 
   it("does not hide malformed textInfo behind the legacy layer.name fallback", () => {

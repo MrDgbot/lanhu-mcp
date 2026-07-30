@@ -269,7 +269,7 @@ export function extractDesignTokensResult(sketch: UnknownRecord): DesignTokensRe
 
     if (getSketchLayerType(layer) === "textLayer") {
       const normalized = normalizeSketchTextLayer(layer, textOptions);
-      for (const warning of normalized.warnings) warnings.add(warning);
+      for (const warning of normalized.tokenWarnings) warnings.add(warning);
       if (normalized.value) {
         for (const run of normalized.value.runs) {
           collectColor(run.color);

@@ -5,7 +5,10 @@ import {
   extractLayerTree,
   extractLayerTreeResult,
 } from "../src/transform/design-tokens.js";
-import { legacyInfoSketch } from "./fixtures/legacy-sketch.js";
+import {
+  legacyInfoSketch,
+  unstyledLegacyInfoSketch,
+} from "./fixtures/legacy-sketch.js";
 
 const artboardSketch = {
   artboard: {
@@ -133,15 +136,24 @@ describe("extractDesignTokens (refactored)", () => {
     );
   });
 
-  it("reports missing text styles for production-shaped legacy name fallback", () => {
+  it("extracts complete legacy styles without degrading tokens for heuristic text", () => {
     const result = extractDesignTokensResult(legacyInfoSketch);
+
+    expect(result.tokens).toContain("Colors (5 unique)");
+    expect(result.tokens).toContain("Fonts (5 unique)");
+    expect(result.tokens).toContain("rgba(16,128,61,1)");
+    expect(result.tokens).toContain("40px");
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("reports missing styles independently from legacy text provenance", () => {
+    const result = extractDesignTokensResult(unstyledLegacyInfoSketch);
 
     expect(result.tokens).not.toContain("Fonts");
     expect(result.tokens).not.toContain("Colors");
-    expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining('Legacy info textLayer "15s" recovered text from layer.name'),
-      expect.stringContaining('Legacy info textLayer "Your loan amount is" recovered text from layer.name'),
-    ]));
+    expect(result.warnings).toEqual([
+      'Legacy info textLayer "Your loan amount is" has no recognizable font or color style fields.',
+    ]);
   });
 
   it("extracts font and text color tokens when legacy textInfo runs provide them", () => {

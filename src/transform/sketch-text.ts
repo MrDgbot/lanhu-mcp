@@ -22,17 +22,24 @@ export interface NormalizedSketchTextRun extends NormalizedSketchTextStyle {
   text: string;
 }
 
+export type SketchTextSource =
+  | "textInfo-array"
+  | "textInfo-object"
+  | "layer-text"
+  | "legacy-layer-name";
+
 export interface NormalizedSketchText {
   text: string;
   runs: NormalizedSketchTextRun[];
   style: NormalizedSketchTextStyle;
   fontName?: string;
-  source: "textInfo-array" | "textInfo-object" | "layer-text" | "legacy-layer-name";
+  source: SketchTextSource;
 }
 
 export interface SketchTextNormalizationResult {
   value?: NormalizedSketchText;
   warnings: string[];
+  tokenWarnings: string[];
 }
 
 export interface SketchTextNormalizationOptions {
@@ -192,6 +199,7 @@ export function normalizeSketchTextLayer(
           source: "textInfo-array",
         },
         warnings,
+        tokenWarnings: warnings,
       };
     }
   } else if (isRecord(textInfo)) {
@@ -208,6 +216,7 @@ export function normalizeSketchTextLayer(
           source: "textInfo-object",
         },
         warnings,
+        tokenWarnings: warnings,
       };
     }
   }
@@ -228,6 +237,7 @@ export function normalizeSketchTextLayer(
         source: "layer-text",
       },
       warnings,
+      tokenWarnings: warnings,
     };
   }
 
@@ -241,6 +251,15 @@ export function normalizeSketchTextLayer(
     const style = normalizeStyle(layer);
     const missingStyle = missingLegacyStyleFields(style);
     const run = { text: layerName, ...style };
+    const heuristicWarning =
+      `Legacy info textLayer "${layerName}": Text was recovered heuristically from ` +
+      "layer.name and may be truncated or differ from rendered content.";
+    const styleWarnings = missingStyle.length > 0
+      ? [
+          `Legacy info textLayer "${layerName}" has no recognizable ` +
+          `${missingStyle.join(" or ")} style fields.`,
+        ]
+      : [];
     return {
       value: {
         text: layerName,
@@ -249,12 +268,8 @@ export function normalizeSketchTextLayer(
         fontName: style.fontFamily ?? style.fontPostScriptName,
         source: "legacy-layer-name",
       },
-      warnings: missingStyle.length > 0
-        ? [
-            `Legacy info textLayer "${layerName}" recovered text from layer.name but has no ` +
-            `recognizable ${missingStyle.join(" or ")} style fields.`,
-          ]
-        : [],
+      warnings: [heuristicWarning, ...styleWarnings],
+      tokenWarnings: styleWarnings,
     };
   }
 
@@ -266,7 +281,7 @@ export function normalizeSketchTextLayer(
         ? "expected textInfo object/array or text.value"
         : "textInfo must be an object or array, or text.value must be present";
   warnings.push(`${warningPrefix(layer)}: ${reason}.`);
-  return { warnings };
+  return { warnings, tokenWarnings: warnings };
 }
 
 export function collectSketchTextWarnings(sketch: UnknownRecord): string[] {
